@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">酒馆</string>
+    <string name="title_activity_main">酒馆</string>
+    <string name="package_name">com.example.jiuguan</string>
+    <string name="custom_url_scheme">com.example.jiuguan</string>
+    <string name="generation_channel_name">AI 生成任务</string>
+    <string name="generation_channel_description">保持应用在后台时继续生成 AI 回复</string>
+    <string name="generation_notification_title">酒馆正在生成回复</string>
+    <string name="generation_notification_text">AI 正在思考中，请勿关闭应用…</string>
+</resources>

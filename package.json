@@ -1,0 +1,78 @@
+{
+  "name": "jiuguan",
+  "version": "1.0.0",
+  "description": "简化版 AI 角色扮演酒馆",
+  "main": "main.js",
+  "homepage": ".",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win --x64 --publish never",
+    "build:android:assets": "node scripts/build-android-assets.js",
+    "build:android:sync": "npx cap sync android",
+    "build:android:apk": "node scripts/build-android-apk.js",
+    "build:android": "npm run build:android:assets && npm run build:android:sync && npm run build:android:apk",
+    "build:web": "node scripts/build-web.js",
+    "build:all": "npm run build:win && npm run build:android && npm run build:web",
+    "test": "node --test \"tests/*.test.mjs\"",
+    "lint": "eslint ."
+  },
+  "keywords": [
+    "ai",
+    "roleplay",
+    "character",
+    "chat"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "build": {
+    "appId": "com.example.jiuguan",
+    "productName": "酒馆",
+    "directories": {
+      "output": "dist/windows",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "src/**/*",
+      "node_modules/marked/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "data",
+        "to": "data",
+        "filter": "**/*"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.4.1",
+    "@eslint/js": "^10.0.1",
+    "electron": "^43.0.0",
+    "electron-builder": "^25.0.0",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.8.0",
+    "globals": "^17.8.0"
+  },
+  "dependencies": {
+    "@capacitor-community/keep-awake": "^8.0.1",
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/core": "^8.4.1",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/share": "^8.0.1",
+    "capacitor-stream-http-v2": "^0.1.7",
+    "marked": "^18.0.5"
+  }
+}

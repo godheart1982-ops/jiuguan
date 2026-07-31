@@ -1,0 +1,17 @@
+{
+  "appId": "com.example.jiuguan",
+  "appName": "酒馆",
+  "webDir": "dist/android-web",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    },
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}

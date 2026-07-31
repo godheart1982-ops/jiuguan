@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>酒馆 - 简化版 AI 角色扮演</title>
+  <link rel="stylesheet" href="src/styles.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "marked": "./node_modules/marked/lib/marked.esm.js",
+      "@capacitor/core": "./node_modules/@capacitor/core/dist/index.js",
+      "@capacitor/filesystem": "./node_modules/@capacitor/filesystem/dist/esm/index.js",
+      "@capacitor/share": "./node_modules/@capacitor/share/dist/esm/index.js",
+      "@capacitor/synapse": "./node_modules/@capacitor/synapse/dist/synapse.mjs"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span class="icon">🍺</span>
+        <span>酒馆</span>
+      </div>
+      <div class="sidebar-section-title">角色卡</div>
+      <nav class="sidebar-nav" id="sidebar-characters">
+        <!-- 动态插入角色列表 -->
+      </nav>
+      <div class="sidebar-footer">
+        <div class="sidebar-item" id="btn-new-character">
+          <span>＋</span>
+          <span>新建角色</span>
+        </div>
+        <div class="sidebar-item" id="btn-worldbooks">
+          <span>🌍</span>
+          <span>世界书库</span>
+        </div>
+        <div class="sidebar-item" id="btn-token-stats">
+          <span>📊</span>
+          <span>用量统计</span>
+        </div>
+        <div class="sidebar-item" id="btn-settings">
+          <span>⚙️</span>
+          <span>API 设置</span>
+        </div>
+        <div class="sidebar-item" id="btn-image-settings">
+          <span>🖼</span>
+          <span>插图设置</span>
+        </div>
+        <div class="sidebar-item" id="btn-other-settings">
+          <span>🛠️</span>
+          <span>其他设置</span>
+        </div>
+      </div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+    <div class="mobile-header" id="mobile-header">
+      <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="打开菜单">☰</button>
+      <span class="mobile-title">酒馆</span>
+      <span class="mobile-spacer"></span>
+    </div>
+    <main class="main-content" id="main-content">
+      <div id="boot-log" style="padding: 20px; color: #aaa; font-family: monospace; white-space: pre-wrap;">启动中...</div>
+      <!-- 动态页面内容 -->
+    </main>
+  </div>
+
+  <script>
+    window.addEventListener('error', function(e) {
+      console.error('Global error:', e.error);
+      var msg = document.createElement('div');
+      msg.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#1a1a20;color:#ff6b6b;padding:20px;z-index:99999;overflow:auto;font-family:monospace;white-space:pre-wrap;';
+      msg.textContent = '页面加载出错：\n' + (e.error && e.error.stack ? e.error.stack : String(e.error || e.message));
+      document.body.appendChild(msg);
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      console.error('Unhandled rejection:', e.reason);
+      var msg = document.createElement('div');
+      msg.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#1a1a20;color:#ff6b6b;padding:20px;z-index:99999;overflow:auto;font-family:monospace;white-space:pre-wrap;';
+      msg.textContent = '未处理的 Promise 错误：\n' + (e.reason && e.reason.stack ? e.reason.stack : String(e.reason));
+      document.body.appendChild(msg);
+    });
+    (function() {
+      var bootLog = document.getElementById('boot-log');
+      function log(msg) {
+        if (bootLog) bootLog.textContent += '\n' + msg;
+        console.log('[boot]', msg);
+      }
+      log('准备加载测试模块...');
+      import('./src/test-module.js')
+        .then(function() {
+          log('测试模块加载完成, testModuleLoaded=' + window.testModuleLoaded);
+          var deps = [
+            './src/services/storage.js',
+            './src/services/api.js',
+            './src/services/foreground.js',
+            '@capacitor/core',
+            'marked',
+            './src/utils/counter.js',
+            './src/utils/big-editor.js',
+            './src/utils/tokenizer.js',
+            './src/pages/home.js',
+            './src/pages/character-edit.js',
+            './src/pages/settings.js',
+            './src/pages/chat.js'
+          ];
+          function testNext(i) {
+            if (i >= deps.length) {
+              log('准备加载 app.js...');
+              return import('./src/app.js');
+            }
+            return import(deps[i])
+              .then(function() { log(deps[i] + ' 加载成功'); })
+              .catch(function(e) { log(deps[i] + ' 加载失败: ' + e.message); })
+              .then(function() { return testNext(i + 1); });
+          }
+          return testNext(0);
+        })
+        .then(function() {
+          log('app.js 加载完成');
+        })
+        .catch(function(e) {
+          log('加载失败: ' + (e.message || String(e)));
+          log('错误详情: ' + (e.stack || JSON.stringify(e)));
+        });
+    })();
+  </script>
+</body>
+</html>
