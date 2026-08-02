@@ -3,7 +3,7 @@
 轻量级 AI 角色扮演客户端：角色卡、多会话、记忆与世界书、插图与联网检索，连接 OpenAI / Anthropic / DeepSeek 等主流 API。  
 支持 **Windows 桌面（Electron）**、**Android（Capacitor）**，另可构建纯网页资源。
 
-当前 Android 版本：**2.1.68**（`versionCode` **122**）
+当前 Android 版本：**2.1.69**（`versionCode` **123**）
 
 ---
 
@@ -25,6 +25,7 @@
 - **副 API（记忆总结）**：可单独填 Base URL / Key / 模型，用于短期总结、长期压缩与精简；留空则回退主 API
 - **搜索 API（联网）**：与对话 API 独立（如 AnySearch）；聊天页 🔍 **仅用输入框原文**作查询，不上传角色卡与历史；结果拼进本轮发送，默认不进记忆
 - **API 配置方案**：主/副 API 可保存多套方案快速切换（方案命名用应用内输入框，兼容 Electron 无 `prompt`）
+- **API 测速 / 跑分**（「API 设置 → 高级」，主/副 API 均可测）：快速 1 次流式 / 完整 = 预热 1 轮 + 正式 N 轮；首 Token P50、总延迟 P95、输出 / 总体 Token/s、请求/分钟、格式遵循（简化状态栏机械校验）、DeepSeek 余额；记录持久化、可删除对比
 - **Token 用量统计**：按角色 / 模型 / 日期统计输入、输出、缓存读等
 
 ### 记忆系统
@@ -272,4 +273,4 @@ jiuguan/
 
 - **package.json**：`1.0.0`（npm 包版本，与 App 展示版可不同）
 - **Android App**：见 `android/app/build.gradle`  
-  当前文档对齐：**2.1.68** / **122**
+  当前文档对齐：**2.1.69** / **123**

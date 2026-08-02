@@ -2476,3 +2476,87 @@ body {
     height: 140px;
   }
 }
+
+/* ---------- API 测速 / 跑分记录卡片 ---------- */
+.st-records {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.st-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+}
+
+.st-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.st-card-title {
+  font-weight: 600;
+}
+
+.st-badge {
+  font-size: 0.78em;
+  font-weight: normal;
+  padding: 1px 8px;
+  border-radius: 999px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.st-badge-ok {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success);
+}
+
+.st-badge-fail {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+}
+
+.st-card-sub {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  margin: 4px 0 8px;
+  word-break: break-all;
+}
+
+.st-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 8px;
+}
+
+.st-metric {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.st-metric-value {
+  font-size: 1.02rem;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.st-metric-label {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin-top: 2px;
+}
+
+.st-error {
+  color: var(--danger);
+  font-size: 0.85rem;
+  word-break: break-all;
+}

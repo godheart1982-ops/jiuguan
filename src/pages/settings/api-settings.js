@@ -3,6 +3,7 @@ import { attachCharCounter } from '../../utils/counter.js';
 import { normalizeSearchConfig, testSearchApi, DEFAULT_SEARCH_CONFIG } from '../../services/search-api.js';
 import { escapeHtml, renderProfileOptions } from './settings-shared.js';
 import { promptText } from '../../utils/prompt-dialog.js';
+import { createSpeedTestController } from './speed-test-ui.js';
 
 export async function renderApiSettingsModal() {
   // 如果已经存在弹窗，先移除
@@ -124,7 +125,7 @@ export async function renderApiSettingsModal() {
         <div class="stats-section" style="margin-top: 20px;">
           <div class="stats-section-header" id="api-advanced-header" style="margin-bottom: 0;">
             <span class="stats-section-toggle" id="api-advanced-icon">${advCollapsed ? '▶' : '▼'}</span>
-            <span>高级（配置方案 · 连接测试）</span>
+            <span>高级（配置方案 · 连接测试 · 测速跑分）</span>
           </div>
           <div id="api-advanced-body" class="${advCollapsed ? 'hidden' : ''}" style="padding-top: 10px;">
         <div class="form-section" style="margin-top: 0; padding-top: 0; border-top: none;">
@@ -153,6 +154,24 @@ export async function renderApiSettingsModal() {
             </div>
             <div class="form-hint">会用当前填写的配置发送一条极简请求（max_tokens=1），验证网络、Key、模型是否可用。</div>
           </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">测速 / 跑分</div>
+          <div class="form-group">
+            <div class="form-row" style="gap: 8px; flex-wrap: wrap; align-items: center;">
+              <select class="form-input" id="speed-test-target" style="min-width: 150px;">
+                <option value="main">主 API（当前填写）</option>
+                <option value="memory">副 API（当前填写）</option>
+              </select>
+              <input class="form-input" id="speed-test-rounds" type="number" min="3" max="20" value="8" style="width: 90px;" title="完整跑分轮数">
+              <button class="btn btn-ghost" id="btn-speed-quick" type="button">快速测速</button>
+              <button class="btn btn-ghost" id="btn-speed-full" type="button">完整跑分</button>
+              <span id="speed-test-status" style="color: #aaa; font-size: 0.9em;"></span>
+            </div>
+            <div class="form-hint">快速 = 1 次流式请求；完整 = 预热 1 轮 + 正式 N 轮（首 Token P50 / 总延迟 P95 / Token/s / 格式遵循）。固定提示词每轮输出约 200~400 token，会实际消耗额度；思考模式跟随主 API 表单当前设置；DeepSeek 端点自动查余额。</div>
+          </div>
+          <div id="speed-test-records" class="st-records"></div>
         </div>
           </div>
         </div>
@@ -645,4 +664,19 @@ export async function renderApiSettingsModal() {
       alert('测试失败：' + (error.message || String(error)));
     }
   });
+
+  // 测速 / 跑分（主/副 API，记录持久化在 config.speedTestRecords）
+  const speedTest = createSpeedTestController({
+    readMainApi: readFormApi,
+    readSubApi: readSubApi,
+    els: {
+      target: document.getElementById('speed-test-target'),
+      rounds: document.getElementById('speed-test-rounds'),
+      quickBtn: document.getElementById('btn-speed-quick'),
+      fullBtn: document.getElementById('btn-speed-full'),
+      status: document.getElementById('speed-test-status'),
+      records: document.getElementById('speed-test-records')
+    }
+  });
+  speedTest.renderRecords();
 }
