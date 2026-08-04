@@ -47,6 +47,14 @@ export function createSendController(deps) {
   let abortController = null;
   let generatingPingTimer = null;
 
+  // 记忆总结后台串行队列：回复完成即可发送下一条，总结任务排队依次补全。
+  // 断档在构造上不存在——每个任务都按"补全所有未总结的窗口外轮次"catch-up，
+  // 连发多条也只是队列里多排几个任务；App 中途被杀，下次回复时 catch-up 接着补。
+  let memoryCatchUpQueue = Promise.resolve();
+  function enqueueMemoryCatchUp(job) {
+    memoryCatchUpQueue = memoryCatchUpQueue.then(job).catch((e) => console.warn('后台记忆总结失败:', e));
+  }
+
   async function showSendPreview(messages) {
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
@@ -282,9 +290,16 @@ export function createSendController(deps) {
                 }
               }
 
-              // 生成短期记忆：顺序补全所有未总结的窗口外轮次，直到正常滞后目标位置（index U-1-3）
+              // 生成短期记忆：入后台串行队列，不再 await——发送按钮随 resolve 立即恢复，
+              // 总结在后台按 catch-up 顺序补全所有未总结的窗口外轮次（直到 index U-1-3）
               const shouldSummarize = character.memoryEnabled !== false;
               if (shouldSummarize) {
+                const memoryChatId = chat.id;
+                enqueueMemoryCatchUp(async () => {
+                // 任务真正执行时重新取当前会话（用户可能已切换对话），身份不符则跳过，
+                // 跳过的轮次不丢：回到该对话后的下一次回复会经 catch-up 补总结
+                const chat = getChat();
+                if (!chat || chat.id !== memoryChatId) return;
                 // 摘要上下文：人名参照 + 最近两条短期摘要（指代消解用；随 catch-up 推进自动滚动）
                 // + 记忆修正行（从当轮回复【全文】机械提取——裁切后的总结文本可能已丢掉末尾修正行）
                 // + 约定/关系/情报当前清单（全量重写：AI 拿着旧清单逐条核对，对齐文本后整体替换）
@@ -446,6 +461,7 @@ export function createSendController(deps) {
                     await maybeCondenseLongTerm(chat, showMemoryStatus);
                   }
                 }
+                });
               }
 
               await updateGenerationForeground({ title: 'AI 回复完成', text: '可以去查看了' });
