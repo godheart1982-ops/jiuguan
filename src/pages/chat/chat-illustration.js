@@ -113,6 +113,9 @@ export function createIllustrationController(ctx) {
     await updateGenerationForeground({ title: '酒馆正在运行', text: '保持后台连接中…' }).catch(() => {});
   }
 
+  // 同一标记的生成中集合：后台自动生成 / 手动点击 / 失败重试并发时，后到的调用直接跳过，防重复出图
+  const inFlightMarkers = new Set();
+
   async function processSeedreamMarkers(msg) {
     const currentChat = getChat();
     const cfg = await getConfig().catch(() => ({}));
@@ -124,6 +127,9 @@ export function createIllustrationController(ctx) {
     const markers = extractSeedreamMarkers(msg.content);
     if (markers.length === 0) return false;
     const mk = markers[0];
+    const flightKey = `${msg.timestamp || ''}::${mk.full.slice(0, 50)}`;
+    if (inFlightMarkers.has(flightKey)) return false;
+    inFlightMarkers.add(flightKey);
     const statusPhase = isStrictMechanicalProvider(provider)
       ? `锚点+衣着模板 → ${providerName}`
       : `副 API 总结画面 → ${providerName}`;
@@ -158,6 +164,7 @@ export function createIllustrationController(ctx) {
     }
     await saveChat(currentChat).catch(() => {});
     await updateGenerationForeground({ title: '酒馆正在运行', text: '保持后台连接中…' }).catch(() => {});
+    inFlightMarkers.delete(flightKey);
     return true;
   }
 

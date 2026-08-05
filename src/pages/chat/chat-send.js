@@ -47,12 +47,17 @@ export function createSendController(deps) {
   let abortController = null;
   let generatingPingTimer = null;
 
-  // 记忆总结后台串行队列：回复完成即可发送下一条，总结任务排队依次补全。
-  // 断档在构造上不存在——每个任务都按"补全所有未总结的窗口外轮次"catch-up，
+  // 后台任务队列（记忆 / 插图各一条）：域内串行——记忆 catch-up 依赖顺序与去重，
+  // 插图避免连发时并发打生图平台；域间并行——回复完成即可发送下一条，记忆总结与出图同时开跑。
+  // 断档在构造上不存在——记忆任务都按"补全所有未总结的窗口外轮次"catch-up，
   // 连发多条也只是队列里多排几个任务；App 中途被杀，下次回复时 catch-up 接着补。
-  let memoryCatchUpQueue = Promise.resolve();
-  function enqueueMemoryCatchUp(job) {
-    memoryCatchUpQueue = memoryCatchUpQueue.then(job).catch((e) => console.warn('后台记忆总结失败:', e));
+  let memoryTaskQueue = Promise.resolve();
+  let illustrationTaskQueue = Promise.resolve();
+  function enqueueMemoryTask(job) {
+    memoryTaskQueue = memoryTaskQueue.then(job).catch((e) => console.warn('后台记忆总结失败:', e));
+  }
+  function enqueueIllustrationTask(job) {
+    illustrationTaskQueue = illustrationTaskQueue.then(job).catch((e) => console.warn('后台插图任务失败:', e));
   }
 
   async function showSendPreview(messages) {
@@ -281,13 +286,22 @@ export function createSendController(deps) {
                 const autoGenBtn = contentEl.querySelector('.img-seedream-gen');
                 if (autoGenBtn) showSeedreamLoading(autoGenBtn);
               }
-              if (await processSeedreamMarkers(assistantMsg)) {
-                if (contentEl) {
-                  const follow = isNearBottom(messagesContainer);
-                  contentEl.innerHTML = renderMarkdown(assistantMsg.content);
-                  hydrateGeneratedImages(contentEl);
-                  if (follow) scrollToBottom(messagesContainer);
-                }
+              // 插图生成入后台串行队列，不再 await——出图期间即可发送下一条。
+              // 完成时若气泡还在当前渲染里就原地更新；已被重建（用户又发了消息）则不动 DOM，
+              // 内容已落盘，下次自然渲染时图片会出现（避免重建导致正在流式的下一条回复冻结）
+              if (!isManualMode) {
+                const illustrationChatId = chat.id;
+                enqueueIllustrationTask(async () => {
+                  const freshChat = getChat();
+                  if (!freshChat || freshChat.id !== illustrationChatId) return;
+                  const changed = await processSeedreamMarkers(assistantMsg);
+                  if (changed && contentEl && contentEl.isConnected) {
+                    const follow = isNearBottom(messagesContainer);
+                    contentEl.innerHTML = renderMarkdown(assistantMsg.content);
+                    hydrateGeneratedImages(contentEl);
+                    if (follow) scrollToBottom(messagesContainer);
+                  }
+                });
               }
 
               // 生成短期记忆：入后台串行队列，不再 await——发送按钮随 resolve 立即恢复，
@@ -295,7 +309,7 @@ export function createSendController(deps) {
               const shouldSummarize = character.memoryEnabled !== false;
               if (shouldSummarize) {
                 const memoryChatId = chat.id;
-                enqueueMemoryCatchUp(async () => {
+                enqueueMemoryTask(async () => {
                 // 任务真正执行时重新取当前会话（用户可能已切换对话），身份不符则跳过，
                 // 跳过的轮次不丢：回到该对话后的下一次回复会经 catch-up 补总结
                 const chat = getChat();
