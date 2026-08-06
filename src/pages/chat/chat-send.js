@@ -11,7 +11,7 @@ import {
 } from '../../services/api-memory.js';
 import { updateGenerationForeground } from '../../services/foreground.js';
 import { countTokens } from '../../utils/tokenizer.js';
-import { escapeHtml, scrollToBottom, isNearBottom } from './chat-utils.js';
+import { escapeHtml, scrollToBottom, isNearBottom, extractThinkingForDisplay } from './chat-utils.js';
 import { normalizePollinationsUrls, extractImageSeeds, hydrateGeneratedImages } from './chat-image.js';
 import { renderMarkdown } from './chat-markdown.js';
 import { appendMessage } from './chat-message-ui.js';
@@ -295,10 +295,19 @@ export function createSendController(deps) {
                   const freshChat = getChat();
                   if (!freshChat || freshChat.id !== illustrationChatId) return;
                   const changed = await processSeedreamMarkers(assistantMsg);
-                  if (changed && contentEl && contentEl.isConnected) {
+                  if (!changed) return;
+                  // contentEl 可能已随回复完成时的 renderMessages 重建而失效：
+                  // 优先原地更新，失效则按 timestamp 找回当前 DOM 里的气泡再更新；
+                  // 气泡不在当前渲染分页（用户翻到了很早的消息）就不动 DOM，内容已落盘
+                  let target = (contentEl && contentEl.isConnected) ? contentEl : null;
+                  if (!target) {
+                    const node = messagesContainer.querySelector(`.message[data-timestamp="${assistantMsg.timestamp}"]`);
+                    target = node ? node.querySelector('.message-content') : null;
+                  }
+                  if (target) {
                     const follow = isNearBottom(messagesContainer);
-                    contentEl.innerHTML = renderMarkdown(assistantMsg.content);
-                    hydrateGeneratedImages(contentEl);
+                    target.innerHTML = renderMarkdown(extractThinkingForDisplay(assistantMsg.content).body);
+                    hydrateGeneratedImages(target);
                     if (follow) scrollToBottom(messagesContainer);
                   }
                 });
