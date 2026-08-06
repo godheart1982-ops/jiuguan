@@ -3,6 +3,7 @@ import {
   generateSeedreamImage,
   generateGeminiImage,
   generateGrokImage,
+  generateWanxImage,
   DEFAULT_GROK_COMPOSE_SYSTEM_PROMPT,
   DEFAULT_GROK_DUO_COMPOSE_SYSTEM_PROMPT,
   DEFAULT_GROK_OUTFIT_LIBRARY,
@@ -26,6 +27,7 @@ export async function renderImageSettingsModal() {
   const image = config.image || {};
   const sd = image.seedream || {};
   const gm = image.gemini || {};
+  const wx = image.wanx || {};
   const gk = image.grok || {};
 
   const overlay = document.createElement('div');
@@ -53,11 +55,12 @@ export async function renderImageSettingsModal() {
             <select class="form-input" id="setting-image-provider" ${ui.imageEnabled === true ? '' : 'disabled'}>
               <option value="pollinations" ${(image.provider || 'pollinations') === 'pollinations' ? 'selected' : ''}>pollinations（免费，在线链接）</option>
               <option value="seedream" ${image.provider === 'seedream' ? 'selected' : ''}>火山方舟 Seedream（付费，约 99 AFP/张）</option>
+              <option value="wanx" ${image.provider === 'wanx' ? 'selected' : ''}>阿里百炼 万相（付费，compatible-mode）</option>
               <option value="gemini" ${image.provider === 'gemini' ? 'selected' : ''}>Google Gemini（付费，Nano Banana 系列）</option>
               <option value="grok" ${image.provider === 'grok' ? 'selected' : ''}>xAI Grok Imagine（付费，审核宽松）</option>
               <option value="manual" ${image.provider === 'manual' ? 'selected' : ''}>手动模式（App 出提示词，自己到网页版生图后选图插入）</option>
             </select>
-            <div class="form-hint">免费模式由 AI 直接拼在线生图 URL。严格版（Seedream/Gemini）用外貌锚点 + 衣着模板库机械拼词后本地出图；Grok / 手动模式由副 API 总结提示词。图床 URL 会过期，本地存储不丢图。</div>
+            <div class="form-hint">免费模式由 AI 直接拼在线生图 URL。严格版（Seedream/万相/Gemini）用外貌锚点 + 衣着模板库机械拼词后本地出图；Grok / 手动模式由副 API 总结提示词。图床 URL 会过期，本地存储不丢图。</div>
           </div>
           <div class="form-group" id="group-image-display">
             <label class="form-label">插图显示</label>
@@ -92,6 +95,27 @@ export async function renderImageSettingsModal() {
                 <option value="2496x1664" ${sd.size === '2496x1664' ? 'selected' : ''}>横版 3:2（2496×1664，适合场景）</option>
               </select>
               <div class="form-hint">Seedream 的像素尺寸是真实重采样，不是拉伸；竖版更适合角色插图。</div>
+            </div>
+          </div>
+          <div id="group-wanx-config">
+            <div class="form-group">
+              <label class="form-label">万相 Base URL</label>
+              <input class="form-input" id="setting-wanx-base-url" type="text" value="${escapeHtml(wx.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1')}" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
+              <div class="form-hint">百炼 compatible-mode 地址（OpenAI 兼容）；Token Plan 用户填套餐专属地址，如 https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">万相 API Key</label>
+              <input class="form-input" id="setting-wanx-api-key" type="password" value="${escapeHtml(wx.apiKey || '')}" placeholder="百炼 / Token Plan 专属 Key（sk-...）">
+            </div>
+            <div class="form-group">
+              <label class="form-label">生图模型</label>
+              <input class="form-input" id="setting-wanx-model" type="text" value="${escapeHtml(wx.model || 'wan2.7-image')}" placeholder="wan2.7-image">
+              <div class="form-hint">万相系列：wan2.7-image（标准）/ wan2.7-image-pro（更精细）</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">图片尺寸</label>
+              <input class="form-input" id="setting-wanx-size" type="text" value="${escapeHtml(wx.size || '1024*1024')}" placeholder="1024*1024">
+              <div class="form-hint">万相尺寸用 * 分隔（不是 x）：1024*1024 方形、720*1280 竖版（适合立绘）、1280*720 横版（适合场景）。</div>
             </div>
           </div>
           <div id="group-gemini-config">
@@ -241,6 +265,7 @@ export async function renderImageSettingsModal() {
   const imageProviderGroup = document.getElementById('group-image-provider');
   const seedreamConfigGroup = document.getElementById('group-seedream-config');
   const geminiConfigGroup = document.getElementById('group-gemini-config');
+  const wanxConfigGroup = document.getElementById('group-wanx-config');
   const grokConfigGroup = document.getElementById('group-grok-config');
   const paidCommonGroup = document.getElementById('group-paid-common');
   const composePromptEl = document.getElementById('setting-seedream-compose-prompt');
@@ -293,12 +318,14 @@ export async function renderImageSettingsModal() {
     imageProviderGroup.style.opacity = enabled ? '' : '0.5';
     const isSeedream = enabled && imageProviderEl.value === 'seedream';
     const isGemini = enabled && imageProviderEl.value === 'gemini';
+    const isWanx = enabled && imageProviderEl.value === 'wanx';
     const isGrok = enabled && imageProviderEl.value === 'grok';
     const isManual = enabled && imageProviderEl.value === 'manual';
-    const isStrict = isSeedream || isGemini;
+    const isStrict = isSeedream || isGemini || isWanx;
     const isGrokLike = isGrok || isManual;
     seedreamConfigGroup.style.display = isSeedream ? '' : 'none';
     geminiConfigGroup.style.display = isGemini ? '' : 'none';
+    wanxConfigGroup.style.display = isWanx ? '' : 'none';
     grokConfigGroup.style.display = isGrok ? '' : 'none';
     paidCommonGroup.style.display = (isStrict || isGrokLike) ? '' : 'none';
     // 严格版：衣着模板库；Grok/手动：人物模式 + compose + 强制衣着
@@ -363,6 +390,14 @@ export async function renderImageSettingsModal() {
           model: document.getElementById('setting-grok-model').value.trim(),
           aspectRatio: document.getElementById('setting-grok-aspect-ratio').value,
           resolution: document.getElementById('setting-grok-resolution').value,
+          prompt
+        });
+      } else if (imageProviderEl.value === 'wanx') {
+        dataUrl = await generateWanxImage({
+          apiKey: document.getElementById('setting-wanx-api-key').value.trim(),
+          baseUrl: document.getElementById('setting-wanx-base-url').value.trim(),
+          model: document.getElementById('setting-wanx-model').value.trim(),
+          size: document.getElementById('setting-wanx-size').value.trim(),
           prompt
         });
       } else {
@@ -475,6 +510,12 @@ export async function renderImageSettingsModal() {
         model: document.getElementById('setting-seedream-model').value.trim(),
         size: document.getElementById('setting-seedream-size').value,
         outfitLibrary: outfitLibraryToSave
+      },
+      wanx: {
+        baseUrl: document.getElementById('setting-wanx-base-url').value.trim(),
+        apiKey: document.getElementById('setting-wanx-api-key').value.trim(),
+        model: document.getElementById('setting-wanx-model').value.trim(),
+        size: document.getElementById('setting-wanx-size').value.trim()
       },
       gemini: {
         baseUrl: document.getElementById('setting-gemini-base-url').value.trim(),
