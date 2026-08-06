@@ -2,8 +2,8 @@
  * 付费生图服务：火山方舟 Seedream / Google Gemini / xAI Grok Imagine
  *
  * Seedream：POST {baseUrl}/images/generations，Bearer 认证，data[0].b64_json 返回
- * 万相（阿里百炼）：POST {baseUrl}/images/generations（compatible-mode，OpenAI 兼容），
- *          data[0].b64_json 或 url 返回（url 为临时图床，需拉取转存）
+ * 万相（阿里百炼）：POST {host}/api/v1/services/aigc/multimodal-generation/generation（DashScope 原生，
+ *          Token Plan 网关同构；output.choices[*].message.content[*].image 取临时 URL 转存）
  * Grok   ：POST {baseUrl}/images/generations，Bearer 认证（OpenAI 兼容格式），
  *          data[0].b64_json 返回；官方 imgen.x.ai 的 url 会过期，b64_json 优先
  * Gemini ：POST {baseUrl}/v1beta/models/{model}:generateContent，
@@ -147,7 +147,13 @@ async function fetchUrlAsDataUrl(imgUrl) {
 }
 
 /**
- * 调用阿里百炼万相生图（compatible-mode，OpenAI 兼容 images/generations），返回 data URL
+ * 调用阿里百炼万相生图，返回 data URL
+ * 万相不走 OpenAI 兼容的 /images/generations（该路径只对齐对话/向量），
+ * 官方文生图是 DashScope 原生多模态端点（同步返回，Token Plan 网关同构）：
+ *   POST {host}/api/v1/services/aigc/multimodal-generation/generation
+ *   请求 {model, input:{messages:[{role:"user",content:[{text:prompt}]}]}, parameters:{size}}
+ *   响应 output.choices[*].message.content[*].image → 临时 URL，拉取转存
+ * 用户只需填控制台给的 compatible-mode 地址，这里自动推导原生端点。
  * @param {Object} opts
  * @param {string} opts.apiKey  百炼 / Token Plan 专属 Key
  * @param {string} opts.baseUrl 例如 https://dashscope.aliyuncs.com/compatible-mode/v1 或 Token Plan 专属地址
@@ -155,11 +161,18 @@ async function fetchUrlAsDataUrl(imgUrl) {
  * @param {string} opts.size    万相尺寸（* 分隔，如 1024*1024、720*1280）
  * @param {string} opts.prompt  提示词
  */
+function resolveWanxEndpoint(baseUrl) {
+  const b = (baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1').trim();
+  const m = b.match(/^(https?:\/\/[^/]+)/i);
+  const origin = m ? m[1] : b.replace(/\/+$/, '');
+  return `${origin}/api/v1/services/aigc/multimodal-generation/generation`;
+}
+
 export async function generateWanxImage({ apiKey, baseUrl, model, size, prompt }) {
   if (!apiKey) throw new Error('未配置万相 API Key（在插图设置中填写）');
   if (!prompt || !prompt.trim()) throw new Error('提示词为空');
 
-  const url = `${(baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/+$/, '')}/images/generations`;
+  const url = resolveWanxEndpoint(baseUrl);
   let response;
   try {
     response = await fetch(url, {
@@ -170,9 +183,10 @@ export async function generateWanxImage({ apiKey, baseUrl, model, size, prompt }
       },
       body: JSON.stringify({
         model: model || 'wan2.7-image',
-        prompt: prompt.trim(),
-        size: size || '1024*1024',
-        n: 1
+        input: {
+          messages: [{ role: 'user', content: [{ text: prompt.trim() }] }]
+        },
+        parameters: { size: size || '1024*1024' }
       })
     });
   } catch (e) {
@@ -196,10 +210,15 @@ export async function generateWanxImage({ apiKey, baseUrl, model, size, prompt }
   }
 
   const data = await response.json();
-  const item = data?.data?.[0];
-  // compatible-mode 默认返回临时 url（会过期，拉取转存）；部分网关支持 b64_json 则优先用
-  if (item?.b64_json) return `data:image/jpeg;base64,${item.b64_json}`;
-  if (item?.url) return await fetchUrlAsDataUrl(item.url);
+  // 原生格式：output.choices[*].message.content 为分块数组，图片块带 image（临时 URL）
+  const choices = data?.output?.choices || [];
+  for (const choice of choices) {
+    const parts = choice?.message?.content || [];
+    for (const part of parts) {
+      if (part?.image) return await fetchUrlAsDataUrl(part.image);
+      if (part?.b64_json) return `data:image/png;base64,${part.b64_json}`;
+    }
+  }
   throw new Error('生图 API 未返回图片数据');
 }
 

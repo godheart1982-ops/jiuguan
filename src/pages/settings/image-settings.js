@@ -101,7 +101,7 @@ export async function renderImageSettingsModal() {
             <div class="form-group">
               <label class="form-label">万相 Base URL</label>
               <input class="form-input" id="setting-wanx-base-url" type="text" value="${escapeHtml(wx.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1')}" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
-              <div class="form-hint">百炼 compatible-mode 地址（OpenAI 兼容）；Token Plan 用户填套餐专属地址，如 https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1</div>
+              <div class="form-hint">填控制台给的 compatible-mode 地址即可（如 https://dashscope.aliyuncs.com/compatible-mode/v1 或 Token Plan 专属地址）；万相文生图走 DashScope 原生端点，App 会按主机地址自动推导，无需手改。</div>
             </div>
             <div class="form-group">
               <label class="form-label">万相 API Key</label>
