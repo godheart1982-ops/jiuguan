@@ -1503,6 +1503,12 @@ body {
   color: inherit;
 }
 
+/* 对话台词（格式约定：台词一律 **加粗**）：AI 气泡里提为暖奶油色，
+   与叙述（常态）/ 独白（斜体弱色）三色分流 */
+.message.assistant .markdown-body strong {
+  color: #f2ddc0;
+}
+
 .markdown-body em {
   font-style: italic;
 }
