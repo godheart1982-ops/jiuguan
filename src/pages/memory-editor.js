@@ -381,7 +381,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       contentEl.innerHTML = `
       <div class="memory-section">
         <div class="memory-section-title">免费生图记忆（${Object.keys(seedArchiveEdit).length}）</div>
-        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">仅免费模式（pollinations）使用。种子：AI 以此为基础做小偏移让构图随剧情变化，档案基准本身锁定不变；想给某个角色"换脸"，改成新数字即可。英文锚点：首次出图时副 API 从设定自动提取，App 逐字拼进生图 URL 锁住外貌；可手改，清空后下次出图自动重新提取。</div>
+        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">仅免费模式（pollinations）使用。种子：AI 以此为基础做小偏移让构图随剧情变化，档案基准本身锁定不变；想给某个角色"换脸"，改成新数字即可。英文锚点：首次出图时副 API 从设定自动提取，App 逐字拼进生图 URL 锁住外貌；设定写了"神似某明星"会保留为 resembling {英文名}（锁脸效果最强，也可手改）；清空后下次出图自动重新提取。</div>
         <div class="memory-list">${seedRows || '<div class="memory-empty">暂无记录（AI 首次插图后自动归档）</div>'}</div>
         <div style="display: flex; gap: 8px; margin-top: 12px;">
           <input type="text" class="form-input" id="seed-new-name" placeholder="角色名" style="flex: 1;">

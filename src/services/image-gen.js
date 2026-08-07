@@ -63,7 +63,7 @@ export async function extractNamedAppearanceAnchor({ name, replyContent, charact
       '- Include only: age, face shape & features, hairstyle & color, eye color, body type (relative words like tall/petite, no centimeter numbers), figure (overall contour words only), skin;\n' +
       '- Start with "A {N}-year-old woman" — age from the setting, infer from vibe if absent, must be an adult;\n' +
       '- No clothing, personality, identity, background, speech habits;\n' +
-      '- No real celebrity names (convert "looks like some star" into feature descriptions, never name them);\n' +
+      '- Celebrity resemblance: if the setting explicitly says she resembles a real celebrity, keep it as "resembling {English name}" (strong face anchor for the image model); if the setting names none, do NOT invent one;\n' +
       '- Do not invent details absent from the materials; extract ONLY 「' + name + '」, ignore all other characters;\n' +
       '- Output the description itself only, no explanations or prefixes.'
     : '你是生图外貌提取助手。从给定材料中提取名为「' + name + '」的女性角色的外貌与身材，输出一段不超过 120 字的中文描述，用于文生图模型保持人物一致性。\n' +
