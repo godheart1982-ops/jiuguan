@@ -13,7 +13,7 @@ import { updateGenerationForeground } from '../../services/foreground.js';
 import { countTokens } from '../../utils/tokenizer.js';
 import { escapeHtml, scrollToBottom, isNearBottom, extractThinkingForDisplay } from './chat-utils.js';
 import { normalizePollinationsUrls, extractImageSeeds, hydrateGeneratedImages } from './chat-image.js';
-import { renderMarkdown } from './chat-markdown.js';
+import { renderMarkdown, renderAssistantDisplay } from './chat-markdown.js';
 import { appendMessage } from './chat-message-ui.js';
 import {
   getAllRounds, getLeadingGreeting, getLastOutputHeading,
@@ -161,6 +161,8 @@ export function createSendController(deps) {
       chat.messages.push(assistantMsg);
       const appendResult = appendMessage(messagesContainer, assistantMsg, avatarUrl, chat, handleRefresh, renderMessages);
       contentEl = appendResult.contentEl;
+      // 流式光标：生成期间消息末尾跳动 ▍，完成/出错/中止时移除（完成后的 renderMessages 重建也会清掉）
+      if (contentEl) contentEl.classList.add('streaming-cursor');
       scrollToBottom(messagesContainer);
 
       // 调试模式：发送前弹出预览
@@ -208,12 +210,14 @@ export function createSendController(deps) {
           onError: async (message) => {
             assistantMsg.content = `（生成失败：${message}）`;
             if (contentEl) {
+              contentEl.classList.remove('streaming-cursor');
               contentEl.innerHTML = renderMarkdown(assistantMsg.content);
             }
             await saveChat(chat).catch(() => {});
             resolve();
           },
           onDone: async (fullContent, aborted) => {
+            if (contentEl) contentEl.classList.remove('streaming-cursor');
             if (!aborted) {
               assistantMsg.content = fullContent || assistantMsg.content;
               // 修正 AI 漏做的 URL 编码，避免插图链接因含空格被 markdown 截断
@@ -306,7 +310,7 @@ export function createSendController(deps) {
                   }
                   if (target) {
                     const follow = isNearBottom(messagesContainer);
-                    target.innerHTML = renderMarkdown(extractThinkingForDisplay(assistantMsg.content).body);
+                    target.innerHTML = renderAssistantDisplay(extractThinkingForDisplay(assistantMsg.content).body);
                     hydrateGeneratedImages(target);
                     if (follow) scrollToBottom(messagesContainer);
                   }

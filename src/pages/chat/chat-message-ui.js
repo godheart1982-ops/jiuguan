@@ -2,7 +2,7 @@
 import { saveChat, createUUID } from '../../services/storage.js';
 import { countTokens } from '../../utils/tokenizer.js';
 import { escapeHtml, extractThinkingForDisplay } from './chat-utils.js';
-import { renderMarkdown } from './chat-markdown.js';
+import { renderMarkdown, renderAssistantDisplay } from './chat-markdown.js';
 
 export async function createNewChat(character) {
   const now = new Date().toISOString();
@@ -66,7 +66,7 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
   wrapper.innerHTML = `
     <div class="message-body">
       ${thinkingHtml}
-      <div class="message-content markdown-body">${renderMarkdown(_disp.body)}</div>
+      <div class="message-content markdown-body">${isAssistant ? renderAssistantDisplay(_disp.body) : renderMarkdown(_disp.body)}</div>
       <div class="message-footer">
         ${actionsHtml}
         <div class="message-meta">${roundHtml}<span class="message-time">${timeStr}</span>${abortedHtml}</div>
@@ -206,7 +206,7 @@ export function openMessageEditor(msg, wrapper, currentChat) {
     msg.timestamp = new Date().toISOString();
 
     const contentEl = wrapper.querySelector('.message-content');
-    contentEl.innerHTML = renderMarkdown(newContent);
+    contentEl.innerHTML = msg.role === 'assistant' ? renderAssistantDisplay(newContent) : renderMarkdown(newContent);
 
     await saveChat(currentChat);
 
