@@ -10,6 +10,7 @@ import {
   extractMemoryCorrections
 } from '../../services/api-memory.js';
 import { updateGenerationForeground } from '../../services/foreground.js';
+import { ensurePollinationsAnchors } from '../../services/image-gen.js';
 import { countTokens } from '../../utils/tokenizer.js';
 import { escapeHtml, scrollToBottom, isNearBottom, extractThinkingForDisplay } from './chat-utils.js';
 import { normalizePollinationsUrls, extractImageSeeds, hydrateGeneratedImages } from './chat-image.js';
@@ -268,17 +269,27 @@ export function createSendController(deps) {
               }
 
               // 插图种子归档：扫描本轮回复中的插图 URL，自动维护种子档案（本地正则，不调 AI）
+              // 插图种子归档：只登记新角色（基准锁定），已有角色的 seed 永不覆盖——
+              // AI 按规则从档案基准做 1-20 偏移让构图随剧情变，档案本身保持基准不漂移
               const foundSeeds = extractImageSeeds(assistantMsg.content);
               if (foundSeeds.length > 0) {
                 if (!chat.seedArchive) chat.seedArchive = {};
                 let archiveChanged = false;
                 for (const { name, seed } of foundSeeds) {
-                  if (chat.seedArchive[name] !== seed) {
-                    chat.seedArchive[name] = seed;
-                    archiveChanged = true;
-                  }
+                  if (chat.seedArchive[name]) continue; // 已登记（含旧数值形态）→ 锁定不覆盖
+                  chat.seedArchive[name] = { seed, anchor: '' };
+                  archiveChanged = true;
                 }
                 if (archiveChanged) await saveChat(chat).catch(() => {});
+              }
+
+              // 免费生图记忆：pollinations URL 机械拼入英文外貌锚点（锁脸）。
+              // 快路径为纯字符串处理；仅某角色首次出图时需一次副 API 提取（几秒，一次性）
+              if (await ensurePollinationsAnchors(assistantMsg, chat, character).catch(() => false)) {
+                await saveChat(chat).catch(() => {});
+                if (contentEl && contentEl.isConnected) {
+                  contentEl.innerHTML = renderMarkdown(assistantMsg.content);
+                }
               }
 
               // 付费插图（seedream/grok/gemini）：检测到 seedream:// 标记则自动生成

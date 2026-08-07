@@ -39,8 +39,12 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   let longTermMemories = [...(chat.memory.longTerm || [])];
   // 事实备忘（本地副本）
   let factsEdit = normalizeFacts(chat.memory.facts);
-  // 插图种子档案（本地副本，保存时写回 chat.seedArchive）
-  let seedArchiveEdit = { ...(chat.seedArchive || {}) };
+  // 免费生图记忆（本地副本，保存时写回 chat.seedArchive；{角色名: {seed, anchor}} 形态）
+  let seedArchiveEdit = Object.fromEntries(
+    Object.entries(chat.seedArchive || {}).map(([k, v]) => [k, (v && typeof v === 'object')
+      ? { seed: Number.isFinite(v.seed) ? v.seed : 0, anchor: typeof v.anchor === 'string' ? v.anchor : '' }
+      : { seed: v, anchor: '' }])
+  );
   // 生图外貌身材锚点档案（本地副本，保存时写回 chat.appearanceAnchors）
   let appearanceAnchorsEdit = { ...(chat.appearanceAnchors || {}) };
   // 当前激活的记忆页签：'short' 短期 / 'long' 长期 / 'facts' 事实备忘 / 'seeds' 插图种子 / 'anchors' 外貌身材锚点
@@ -74,7 +78,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-facts" data-tab="facts">事实备忘</button>
           </div>
           <div class="memory-tabs-row">
-            <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-seeds" data-tab="seeds">插图种子</button>
+            <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-seeds" data-tab="seeds">免费生图记忆</button>
             <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-anchors" data-tab="anchors">外貌锚点</button>
           </div>
         </div>
@@ -196,7 +200,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       shortTabBtn.textContent = `短期（${shortTerm.length}）`;
       longTabBtn.textContent = `长期（${longTerm.length}）`;
       factsTabBtn.textContent = `事实（${factsCount()}）`;
-      seedsTabBtn.textContent = `种子（${Object.keys(seedArchiveEdit).length}）`;
+      seedsTabBtn.textContent = `免费生图（${Object.keys(seedArchiveEdit).length}）`;
       anchorsTabBtn.textContent = `锚点（${Object.keys(appearanceAnchorsEdit).length}）`;
       shortTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'short' ? 'btn-primary' : 'btn-ghost');
       longTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'long' ? 'btn-primary' : 'btn-ghost');
@@ -363,18 +367,22 @@ export async function openMemoryEditor(chat, character, onUpdate) {
     }
 
     if (activeTab === 'seeds') {
-      const seedRows = Object.entries(seedArchiveEdit).map(([name, seed]) => `
-        <div class="memory-card" style="display: flex; align-items: center; gap: 8px;">
-          <span style="flex: 1; font-size: 0.9rem; min-width: 0; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(name)}</span>
-          <input type="number" class="form-input seed-value-input" data-name="${escapeHtml(name)}" style="width: 110px;" min="1" max="99999" value="${seed}">
-          <button class="btn btn-danger btn-small btn-delete-seed" data-name="${escapeHtml(name)}">删除</button>
+      // 免费生图记忆：一个角色一张卡，两行——种子（基准锁定，AI 从它偏移）+ 英文外貌锚点（机械拼进 URL 锁脸）
+      const seedRows = Object.entries(seedArchiveEdit).map(([name, rec]) => `
+        <div class="memory-card">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="flex: 1; font-size: 0.9rem; min-width: 0; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(name)}</span>
+            <input type="number" class="form-input seed-value-input" data-name="${escapeHtml(name)}" style="width: 110px;" min="1" max="99999" value="${rec.seed || ''}" placeholder="种子">
+            <button class="btn btn-danger btn-small btn-delete-seed" data-name="${escapeHtml(name)}">删除</button>
+          </div>
+          <textarea class="form-input seed-anchor-input" data-name="${escapeHtml(name)}" rows="2" style="margin-top: 6px; font-size: 0.85rem; font-family: monospace;" placeholder="英文外貌锚点（留空则该角色下次出图时自动提取）">${escapeHtml(rec.anchor || '')}</textarea>
         </div>
       `).join('');
       contentEl.innerHTML = `
       <div class="memory-section">
-        <div class="memory-section-title">插图种子档案（${Object.keys(seedArchiveEdit).length}）</div>
-        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">App 自动从 AI 回复的插图 URL 中归档，并随请求注入【插图种子档案】；同一角色固定种子可保持生图人物一致。想给某个角色"换脸"，改成一个新数字即可。</div>
-        <div class="memory-list">${seedRows || '<div class="memory-empty">暂无种子记录（AI 首次插图后自动归档）</div>'}</div>
+        <div class="memory-section-title">免费生图记忆（${Object.keys(seedArchiveEdit).length}）</div>
+        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">仅免费模式（pollinations）使用。种子：AI 以此为基础做小偏移让构图随剧情变化，档案基准本身锁定不变；想给某个角色"换脸"，改成新数字即可。英文锚点：首次出图时副 API 从设定自动提取，App 逐字拼进生图 URL 锁住外貌；可手改，清空后下次出图自动重新提取。</div>
+        <div class="memory-list">${seedRows || '<div class="memory-empty">暂无记录（AI 首次插图后自动归档）</div>'}</div>
         <div style="display: flex; gap: 8px; margin-top: 12px;">
           <input type="text" class="form-input" id="seed-new-name" placeholder="角色名" style="flex: 1;">
           <input type="number" class="form-input" id="seed-new-value" placeholder="种子(100-999)" style="width: 130px;" min="1" max="99999">
@@ -387,9 +395,14 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         input.addEventListener('change', () => {
           const v = parseInt(input.value, 10);
           if (Number.isFinite(v) && v >= 1) {
-            seedArchiveEdit[input.dataset.name] = v;
-            renderContent();
+            seedArchiveEdit[input.dataset.name].seed = v;
           }
+        });
+      });
+      // 锚点实时同步（不触发重渲染，避免输入中丢焦点）
+      contentEl.querySelectorAll('.seed-anchor-input').forEach(input => {
+        input.addEventListener('input', () => {
+          seedArchiveEdit[input.dataset.name].anchor = input.value;
         });
       });
       contentEl.querySelectorAll('.btn-delete-seed').forEach(btn => {
@@ -404,7 +417,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
           const name = (contentEl.querySelector('#seed-new-name').value || '').trim();
           const v = parseInt(contentEl.querySelector('#seed-new-value').value, 10);
           if (!name || !Number.isFinite(v) || v < 1) return;
-          seedArchiveEdit[name] = v;
+          seedArchiveEdit[name] = { seed: v, anchor: '' };
           renderContent();
         });
       }
@@ -722,10 +735,14 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             knownBy: Array.isArray(i.knownBy) ? i.knownBy : []
           }))
       });
-      // 插图种子档案（过滤空种子值）
+      // 免费生图记忆（种子 + 英文锚点）：保留有合法种子或非空锚点的记录
       const cleanedSeeds = {};
-      for (const [name, seed] of Object.entries(seedArchiveEdit)) {
-        if (name.trim() && Number.isFinite(seed) && seed >= 1) cleanedSeeds[name.trim()] = seed;
+      for (const [name, rec] of Object.entries(seedArchiveEdit)) {
+        if (!name.trim()) continue;
+        const seed = (rec && typeof rec === 'object') ? rec.seed : rec;
+        const anchor = (rec && typeof rec === 'object') ? String(rec.anchor || '').trim() : '';
+        const seedOk = Number.isFinite(seed) && seed >= 1;
+        if (seedOk || anchor) cleanedSeeds[name.trim()] = { seed: seedOk ? seed : 0, anchor };
       }
       chat.seedArchive = cleanedSeeds;
       // 生图外貌身材锚点档案（过滤空描述）

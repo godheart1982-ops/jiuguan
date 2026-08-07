@@ -150,10 +150,14 @@ export async function buildMessages(character, historyMessages, userMessage, mem
 
   // 插图种子档案：随生图不断更新，放在记忆区之后（动态区，不进缓存）
   // 仅 pollinations 模式使用；seedream/gemini 无 seed 参数，不需要档案
+  // 记录形态为 {seed, anchor}（免费生图记忆）；注入只给 AI 看 seed，英文锚点由 App 机械拼 URL 用
   if (imageEnabled && imageProvider === 'pollinations' && seedArchive && typeof seedArchive === 'object') {
     const entries = Object.entries(seedArchive);
     if (entries.length > 0) {
-      systemContent += '\n\n【插图种子档案】' + entries.map(([name, seed]) => `${name}=${seed}`).join('；');
+      systemContent += '\n\n【插图种子档案】' + entries.map(([name, rec]) => {
+        const seed = (rec && typeof rec === 'object') ? rec.seed : rec; // 旧数值形态防御
+        return `${name}=${seed}`;
+      }).join('；');
     }
   }
 

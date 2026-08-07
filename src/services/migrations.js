@@ -239,6 +239,21 @@ const CHAT_STEPS = [
         chat.roundCounter = (chat.messages || []).filter(m => m.role === 'user').length;
       }
     }
+  },
+  {
+    name: 'seedArchive 升级为免费生图记忆（{seed, anchor} 对象）',
+    migrate(chat) {
+      const sa = chat.seedArchive;
+      if (!sa || typeof sa !== 'object') return;
+      for (const [name, v] of Object.entries(sa)) {
+        if (typeof v === 'number') {
+          sa[name] = { seed: v, anchor: '' };
+        } else if (v && typeof v === 'object') {
+          if (!Number.isFinite(v.seed)) v.seed = 0;
+          if (typeof v.anchor !== 'string') v.anchor = '';
+        }
+      }
+    }
   }
 ];
 
