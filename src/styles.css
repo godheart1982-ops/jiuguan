@@ -2610,7 +2610,7 @@ body::before {
 }
 
 /* ---------- 状态栏折叠（AI 回复的 >### 模块收进折叠块，正文成为视觉主角） ---------- */
-/* 展开态去卡片化：只留左侧琥珀竖线作锚点，内容与正文同宽同字号 */
+/* 展开态与正文完全同宽同号，无任何额外装饰 */
 
 .status-fold {
   margin: 0 0 10px;
@@ -2655,8 +2655,6 @@ body::before {
 }
 
 .status-fold-body {
-  border-left: 2px solid var(--accent);
-  padding-left: 10px;
   color: var(--text-secondary);
 }
 
