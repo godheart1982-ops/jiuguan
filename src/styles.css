@@ -2610,26 +2610,23 @@ body::before {
 }
 
 /* ---------- 状态栏折叠（AI 回复的 >### 模块收进折叠块，正文成为视觉主角） ---------- */
+/* 展开态去卡片化：只留左侧琥珀竖线作锚点，内容与正文同宽同字号 */
 
 .status-fold {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
   margin: 0 0 10px;
-  overflow: hidden;
 }
 
 .status-fold > summary {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 4px 2px;
   cursor: pointer;
   list-style: none;
   color: var(--text-muted);
   font-size: 0.85rem;
   user-select: none;
-  transition: color 0.15s, background 0.15s;
+  transition: color 0.15s;
 }
 
 .status-fold > summary::-webkit-details-marker {
@@ -2638,11 +2635,6 @@ body::before {
 
 .status-fold > summary:hover {
   color: var(--text-secondary);
-  background: var(--bg-hover);
-}
-
-.status-fold[open] > summary {
-  border-bottom: 1px solid var(--border);
 }
 
 .status-fold-label {
@@ -2663,8 +2655,8 @@ body::before {
 }
 
 .status-fold-body {
-  padding: 10px 12px;
-  font-size: 0.85rem;
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
   color: var(--text-secondary);
 }
 

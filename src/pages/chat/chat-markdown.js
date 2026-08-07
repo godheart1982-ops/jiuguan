@@ -46,10 +46,14 @@ export function renderAssistantDisplay(body) {
   const { modules, headings, rest } = splitLeadingModules(body);
   const restHtml = applyMonologueStyle(renderMarkdown(rest));
   if (!modules) return restHtml;
-  const summary = headings.filter(Boolean).join(' · ') || '状态栏';
+  // 摘要行：只列角色模块名（固定模块永远在不报名字），加模块总数
+  const charNames = [...modules.matchAll(/^>\s*#{2,6}\s*\[([^\]|]+)/gm)].map((m) => m[1].trim()).filter(Boolean);
+  const summary = charNames.length
+    ? `状态栏｜${escapeHtml(charNames.join('、'))} 等 ${headings.length} 个模块`
+    : `状态栏｜${headings.length} 个模块`;
   return (
     `<details class="status-fold"><summary>` +
-    `<span>📊</span><span class="status-fold-label">${escapeHtml(summary)}</span>` +
+    `<span>📊</span><span class="status-fold-label">${summary}</span>` +
     `<span class="status-fold-caret">▸</span></summary>` +
     `<div class="status-fold-body">${renderMarkdown(modules)}</div></details>` +
     restHtml
