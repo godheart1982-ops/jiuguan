@@ -71,6 +71,15 @@ export async function renderImageSettingsModal() {
             </select>
             <div class="form-hint">仅影响 pollinations 在线图：点击加载=图片显示为占位按钮，点击才加载；完全隐藏=只显示一行提示文字。Seedream 本地图始终自动显示。</div>
           </div>
+          <div id="group-pollinations-config">
+            <div class="form-group">
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: normal;">
+                <input type="checkbox" id="setting-pollinations-nsfw" style="width: 16px; height: 16px; cursor: pointer;" ${image.pollinationsNsfw === true ? 'checked' : ''}>
+                <span>允许 NSFW 提示词</span>
+              </label>
+              <div class="form-hint">仅免费模式（pollinations）。开启后提示词不再强制 SFW，衣着/身体/亲密描写按正文如实翻译；画面仍锁单人。被平台过滤时表现为图片加载失败，关掉开关即可恢复。</div>
+            </div>
+          </div>
           <div id="group-seedream-config">
             <div class="form-group">
               <label class="form-label">Seedream Base URL</label>
@@ -266,6 +275,7 @@ export async function renderImageSettingsModal() {
   const seedreamConfigGroup = document.getElementById('group-seedream-config');
   const geminiConfigGroup = document.getElementById('group-gemini-config');
   const wanxConfigGroup = document.getElementById('group-wanx-config');
+  const pollinationsConfigGroup = document.getElementById('group-pollinations-config');
   const grokConfigGroup = document.getElementById('group-grok-config');
   const paidCommonGroup = document.getElementById('group-paid-common');
   const composePromptEl = document.getElementById('setting-seedream-compose-prompt');
@@ -319,6 +329,7 @@ export async function renderImageSettingsModal() {
     const isSeedream = enabled && imageProviderEl.value === 'seedream';
     const isGemini = enabled && imageProviderEl.value === 'gemini';
     const isWanx = enabled && imageProviderEl.value === 'wanx';
+    const isFree = enabled && imageProviderEl.value === 'pollinations';
     const isGrok = enabled && imageProviderEl.value === 'grok';
     const isManual = enabled && imageProviderEl.value === 'manual';
     const isStrict = isSeedream || isGemini || isWanx;
@@ -326,6 +337,7 @@ export async function renderImageSettingsModal() {
     seedreamConfigGroup.style.display = isSeedream ? '' : 'none';
     geminiConfigGroup.style.display = isGemini ? '' : 'none';
     wanxConfigGroup.style.display = isWanx ? '' : 'none';
+    pollinationsConfigGroup.style.display = isFree ? '' : 'none';
     grokConfigGroup.style.display = isGrok ? '' : 'none';
     paidCommonGroup.style.display = (isStrict || isGrokLike) ? '' : 'none';
     // 严格版：衣着模板库；Grok/手动：人物模式 + compose + 强制衣着
@@ -504,6 +516,7 @@ export async function renderImageSettingsModal() {
     latestConfig.image = {
       provider: document.getElementById('setting-image-provider').value,
       personMode: grokPersonModeEl.value,
+      pollinationsNsfw: document.getElementById('setting-pollinations-nsfw').checked,
       seedream: {
         baseUrl: document.getElementById('setting-seedream-base-url').value.trim(),
         apiKey: document.getElementById('setting-seedream-api-key').value.trim(),
