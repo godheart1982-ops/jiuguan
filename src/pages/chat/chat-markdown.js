@@ -52,7 +52,7 @@ export function renderAssistantDisplay(body) {
     ? `状态栏｜${escapeHtml(charNames.join('、'))} 等 ${headings.length} 个模块`
     : `状态栏｜${headings.length} 个模块`;
   return (
-    `<details class="status-fold"><summary>` +
+    `<details class="status-fold" open><summary>` +
     `<span>📊</span><span class="status-fold-label">${summary}</span>` +
     `<span class="status-fold-caret">▸</span></summary>` +
     `<div class="status-fold-body">${renderMarkdown(modules)}</div></details>` +
