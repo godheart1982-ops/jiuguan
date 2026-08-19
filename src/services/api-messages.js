@@ -3,7 +3,7 @@
  */
 
 import { getConfig } from './storage.js';
-import { EVENT_SYSTEM_RULE, RANDOM_NPC_RULE } from './narrative-rules.js';
+import { EVENT_SYSTEM_RULE, RANDOM_NPC_RULE, IMMERSIVE_ACTING_RULE } from './narrative-rules.js';
 import { isPaidImageProvider } from './image-gen.js';
 import { sanitizeHistoryIllustrationMarkers } from './illustration-markers.js';
 import { resolveWorldBookInjection } from './world-book.js';
@@ -84,6 +84,12 @@ export async function buildMessages(character, historyMessages, userMessage, mem
 
     systemContent += '\n\n【强制要求】在输出回复前，请再次仔细阅读并核对上面的输出格式与模块顺序清单。' +
       '回复时必须严格、完整、逐条地按照该格式执行，不得省略、合并或跳过任何模块。';
+  }
+
+  // 沉浸演绎·反AI腔总则：放在输出格式要求之后（先立格式、再立腔调），静态文本可进缓存
+  // 开关在「其他设置 → 生成行为」（behavior.immersiveActing），默认开
+  if (!config.behavior || config.behavior.immersiveActing !== false) {
+    systemContent += '\n\n' + IMMERSIVE_ACTING_RULE;
   }
 
   // 插图功能（App 级开关）：规则文本是静态的，放在记忆区之前可进缓存

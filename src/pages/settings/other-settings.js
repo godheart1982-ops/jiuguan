@@ -65,6 +65,13 @@ export async function renderOtherSettingsModal() {
             <div class="form-hint">开启后，AI 发现【长期记忆】或【事实备忘】与剧情现状矛盾时，会在回复末尾输出「记忆修正：…」，记忆总结时据此自动更正事实备忘。若所用模型频繁误报修正，可在此关闭。</div>
           </div>
           <div class="form-group">
+            <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="setting-immersive-acting" ${behavior.immersiveActing !== false ? 'checked' : ''}>
+              <span>沉浸演绎·反AI腔总则（增强人味）</span>
+            </label>
+            <div class="form-hint">开启后，向 system 注入一段演绎纪律：不写主控、演出来不解释、拥抱非理性、禁止点题抒情与客服腔，压制新模型"有问必答/句句完整"的对齐职业病。若某模型因此格式不稳定或风格过头，可在此关闭。</div>
+          </div>
+          <div class="form-group">
             <label class="form-label">空发送推演指令</label>
             <textarea class="form-input" id="setting-auto-advance-prompt" rows="4" style="font-family: monospace; font-size: 0.85rem;"></textarea>
             <div class="form-hint">输入框为空时点发送，App 会把这段文字作为你的消息发给 AI，让它根据设定、记忆与状态栏自行推演下一轮剧情。留空则用内置默认。</div>
@@ -197,7 +204,8 @@ export async function renderOtherSettingsModal() {
     latestConfig.behavior = {
       autoCompleteLastModule: document.getElementById('setting-auto-complete').checked,
       autoAdvancePrompt: (autoAdvanceEl.value.trim() === DEFAULT_AUTO_ADVANCE_PROMPT.trim()) ? '' : autoAdvanceEl.value.trim(),
-      memoryCorrection: document.getElementById('setting-memory-correction').checked
+      memoryCorrection: document.getElementById('setting-memory-correction').checked,
+      immersiveActing: document.getElementById('setting-immersive-acting').checked
     };
     // WebDAV（坚果云）
     const prevWebdav = normalizeWebdavConfig(latestConfig.webdav);
