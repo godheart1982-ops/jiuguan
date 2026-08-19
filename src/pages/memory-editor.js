@@ -228,7 +228,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             <input type="text" class="form-input fact-rel-name" data-index="${index}" value="${escapeHtml(r.name)}" placeholder="人名" style="width:120px;">
             <button class="btn btn-danger btn-small btn-del-rel" data-index="${index}">删除</button>
           </div>
-          <input type="text" class="form-input fact-rel-note" data-index="${index}" value="${escapeHtml(r.note || '')}" placeholder="关系说明一句">
+          <input type="text" class="form-input fact-rel-note" data-index="${index}" value="${escapeHtml(r.note || '')}" placeholder="身份关系+状态词（如：同班同学，暧昧）">
         </div>
       `).join('');
       const worldRows = (factsEdit.worldEvents || []).map((w, index) => `
