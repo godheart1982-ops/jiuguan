@@ -66,7 +66,7 @@ npm run build:android:apk      # 仅打包 APK
 **自动升版：** 执行 `npm run build:android` / `build:android:apk` 时，脚本会自动：
 
 - `versionCode` +1  
-- `versionName` 末段 +1（如 `2.1.87` → `2.1.87`）  
+- `versionName` 末段 +1（如 `2.1.88` → `2.1.88`）  
 - 同步改写 `android/app/build.gradle`（并尽量更新 README/BUILD 中的版本字样）
 
 跳过升版（仅重打同号）：`SKIP_VERSION_BUMP=1` 或 `node scripts/build-android-apk.js --no-bump`
@@ -74,8 +74,8 @@ npm run build:android:apk      # 仅打包 APK
 也可手动改 `android/app/build.gradle`：
 
 ```gradle
-versionCode 141        // 整数，每版 +1（覆盖安装时系统据此判断新旧）
-versionName "2.1.87"   // 显示给用户的版本号
+versionCode 142        // 整数，每版 +1（覆盖安装时系统据此判断新旧）
+versionName "2.1.88"   // 显示给用户的版本号
 ```
 
 ### 数据存储

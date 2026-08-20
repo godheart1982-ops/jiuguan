@@ -32,8 +32,8 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   // 原生 extended thinking 生效条件：Anthropic 格式 + 推理强度非关闭
   const nativeThinking = cfgApi.format === 'anthropic'
     && cfgApi.reasoningEffort && cfgApi.reasoningEffort !== 'off';
-  // 开原生思考时，忽略提示词版 <思考>（避免真思考 + 假装思考重复）
-  const thinkingOn = !!(cfgApi.enableThinking === true) && !nativeThinking;
+  // 提示词思维链与原生推理相互独立、可叠加：思维链是 system 里的输出指令，原生推理是请求参数
+  const thinkingOn = !!(cfgApi.enableThinking === true);
 
   // System prompt：角色描述 + 主控信息 + 长期记忆 + 输出格式约束
   let systemContent = character.description || '';
@@ -203,8 +203,8 @@ export async function buildMessages(character, historyMessages, userMessage, mem
 
   // 思维链预填充（实验）：开关开启时在末尾追加 assistant 开头，强制模型先续写思维链再写正文
   // prefix 字段是 DeepSeek 官方前缀续写协议要求（仅最后一条 assistant 消息生效）
-  // 原生思考生效时跳过：Anthropic thinking 模式不允许 assistant 前缀续写
-  if (config.api && config.api.prefillThinking === true && !nativeThinking) {
+  // 原生思考生效时跳过：Anthropic thinking 模式不允许 assistant 前缀续写；DeepSeek 思考模式同样不兼容前缀续写
+  if (config.api && config.api.prefillThinking === true && !nativeThinking && cfgApi.deepseekThinking !== true) {
     messages.push({ role: 'assistant', content: THINKING_PREFILL, prefix: true });
   }
 

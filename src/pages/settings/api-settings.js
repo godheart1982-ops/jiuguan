@@ -21,13 +21,8 @@ export async function renderApiSettingsModal() {
 
   const advCollapsed = !config.ui || config.ui.apiSettingsAdvancedCollapsed !== false;
 
-  // 底层字段合成思考模式初始值：原生推理优先，其次提示词思维链
-  let thinkingModeInit = 'off';
-  if ((api.reasoningEffort && api.reasoningEffort !== 'off') || api.deepseekThinking === true) {
-    thinkingModeInit = 'native';
-  } else if (api.enableThinking === true) {
-    thinkingModeInit = 'prompt';
-  }
+  // 思考开关初始值：原生推理与提示词思维链为两个独立开关，可叠加
+  const nativeThinkingInit = (api.reasoningEffort && api.reasoningEffort !== 'off') || api.deepseekThinking === true;
 
   overlay.innerHTML = `
     <div class="modal">
@@ -83,13 +78,17 @@ export async function renderApiSettingsModal() {
         </div>
 
         <div class="form-group">
-          <label class="form-label">思考模式</label>
-          <select class="form-input" id="setting-thinking-mode">
-            <option value="off" ${thinkingModeInit === 'off' ? 'selected' : ''}>关闭</option>
-            <option value="prompt" ${thinkingModeInit === 'prompt' ? 'selected' : ''}>提示词思维链</option>
-            <option value="native" ${thinkingModeInit === 'native' ? 'selected' : ''}>原生推理</option>
-          </select>
-          <div class="form-hint">提示词思维链：把角色卡的「思考格式」拼进 system prompt，AI 先输出 &lt;思考&gt; 再写正文；原生推理：模型真正的深度推理，按 API 格式自动分流（Anthropic 走 extended thinking，OpenAI 走 DeepSeek reasoning）。</div>
+          <label class="form-label">思考</label>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="setting-enable-thinking" style="width: 16px; height: 16px; cursor: pointer;" ${api.enableThinking === true ? 'checked' : ''}>
+            <span>提示词思维链</span>
+          </label>
+          <div class="form-hint">把角色卡的「思考格式」拼进 system prompt，AI 先输出 &lt;思考&gt; 再写正文。</div>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: normal; margin-top: 8px;">
+            <input type="checkbox" id="setting-native-thinking" style="width: 16px; height: 16px; cursor: pointer;" ${nativeThinkingInit ? 'checked' : ''}>
+            <span>原生推理</span>
+          </label>
+          <div class="form-hint">模型真正的深度推理，按 API 格式自动分流（Anthropic 走 extended thinking，OpenAI 走 DeepSeek reasoning）。与提示词思维链可叠加：原生推理在幕后思考，正文只输出思维链；叠加时「显示推理过程」可当调试开关，临时查看原生推理。</div>
         </div>
 
         <div class="form-group hidden" id="group-prefill-thinking">
@@ -97,7 +96,7 @@ export async function renderApiSettingsModal() {
             <input type="checkbox" id="setting-prefill-thinking" style="width: 16px; height: 16px; cursor: pointer;" ${api.prefillThinking === true ? 'checked' : ''}>
             <span>思维链预填充（实验）</span>
           </label>
-          <div class="form-hint">发送时在回复开头预置 &lt;思考&gt;，强制模型先输出思维链再写正文，可根治开头掉思维链的问题。需端点支持 assistant 前缀续写（DeepSeek 官方接口自动走 beta 端点，火山方舟/豆包原生支持）。不支持的服务商会报错，届时请关闭。</div>
+          <div class="form-hint">发送时在回复开头预置 &lt;思考&gt;，强制模型先输出思维链再写正文，可根治开头掉思维链的问题。需端点支持 assistant 前缀续写（DeepSeek 官方接口自动走 beta 端点，火山方舟/豆包原生支持）。不支持的服务商会报错，届时请关闭。原生推理开启时预填充自动停用（协议不允许前缀续写）。</div>
         </div>
 
         <div class="form-group hidden" id="group-native-reasoning">
@@ -283,9 +282,10 @@ export async function renderApiSettingsModal() {
     syncTempDisabled();
   }
 
-  // 思考模式联动：off=全隐藏；prompt=预填充开关；native=按 API 格式分流强度下拉 + 显示推理过程
+  // 思考开关联动：思维链开=显示预填充开关；原生推理开=按 API 格式分流强度下拉 + 显示推理过程
   const formatEl = document.getElementById('setting-format');
-  const thinkingModeEl = document.getElementById('setting-thinking-mode');
+  const enableThinkingEl = document.getElementById('setting-enable-thinking');
+  const nativeThinkingEl = document.getElementById('setting-native-thinking');
   const reasoningEl = document.getElementById('setting-reasoning-effort');
   const deepseekEffortEl = document.getElementById('setting-deepseek-effort');
   const prefillGroup = document.getElementById('group-prefill-thinking');
@@ -298,17 +298,19 @@ export async function renderApiSettingsModal() {
   const NATIVE_HINT_DEEPSEEK = '在请求中附加 thinking 参数，并解析返回的 reasoning_content 推理内容；适用于 deepseek-reasoner 等支持推理的模型。';
 
   const syncThinkingFields = () => {
-    const mode = thinkingModeEl.value;
+    const promptOn = enableThinkingEl.checked;
+    const nativeOn = nativeThinkingEl.checked;
     const isAnthropic = formatEl.value === 'anthropic';
-    prefillGroup.classList.toggle('hidden', mode !== 'prompt');
-    nativeGroup.classList.toggle('hidden', mode !== 'native');
-    showThinkingGroup.classList.toggle('hidden', mode !== 'native');
+    prefillGroup.classList.toggle('hidden', !promptOn);
+    nativeGroup.classList.toggle('hidden', !nativeOn);
+    showThinkingGroup.classList.toggle('hidden', !nativeOn);
     reasoningEl.classList.toggle('hidden', !isAnthropic);
     deepseekEffortEl.classList.toggle('hidden', isAnthropic);
     nativeEffortLabel.textContent = isAnthropic ? '推理强度（Anthropic）' : '推理强度（DeepSeek）';
     nativeEffortHint.textContent = isAnthropic ? NATIVE_HINT_ANTHROPIC : NATIVE_HINT_DEEPSEEK;
   };
-  thinkingModeEl.addEventListener('change', syncThinkingFields);
+  enableThinkingEl.addEventListener('change', syncThinkingFields);
+  nativeThinkingEl.addEventListener('change', syncThinkingFields);
   formatEl.addEventListener('change', syncThinkingFields);
   syncThinkingFields();
 
@@ -338,8 +340,9 @@ export async function renderApiSettingsModal() {
     const maxTokens = maxTokensRaw ? parseInt(maxTokensRaw, 10) : null;
     const format = document.getElementById('setting-format').value || 'openai';
     const isAnthropic = format === 'anthropic';
-    // 思考模式（off/prompt/native）拆回底层字段，api 层逻辑不变
-    const thinkingMode = document.getElementById('setting-thinking-mode').value;
+    // 思考开关：提示词思维链与原生推理相互独立，可叠加
+    const promptChainOn = document.getElementById('setting-enable-thinking').checked;
+    const nativeThinkingOn = document.getElementById('setting-native-thinking').checked;
     return {
       baseUrl,
       apiKey,
@@ -347,12 +350,12 @@ export async function renderApiSettingsModal() {
       temperature: isNaN(temperature) ? 0.8 : temperature,
       temperatureEnabled: document.getElementById('setting-temperature-enabled').checked,
       maxTokens: maxTokensRaw && !isNaN(maxTokens) ? maxTokens : null,
-      enableThinking: thinkingMode === 'prompt',
-      prefillThinking: thinkingMode === 'prompt' ? document.getElementById('setting-prefill-thinking').checked : false,
-      reasoningEffort: (thinkingMode === 'native' && isAnthropic) ? document.getElementById('setting-reasoning-effort').value : 'off',
-      deepseekThinking: thinkingMode === 'native' && !isAnthropic,
+      enableThinking: promptChainOn,
+      prefillThinking: promptChainOn ? document.getElementById('setting-prefill-thinking').checked : false,
+      reasoningEffort: (nativeThinkingOn && isAnthropic) ? document.getElementById('setting-reasoning-effort').value : 'off',
+      deepseekThinking: nativeThinkingOn && !isAnthropic,
       deepseekReasoningEffort: document.getElementById('setting-deepseek-effort').value || 'high',
-      showThinking: thinkingMode === 'native' ? document.getElementById('setting-show-thinking').checked : (api.showThinking === true),
+      showThinking: nativeThinkingOn ? document.getElementById('setting-show-thinking').checked : (api.showThinking === true),
       format,
       memoryApi: readSubApi()
     };
@@ -394,14 +397,10 @@ export async function renderApiSettingsModal() {
     document.getElementById('setting-temperature-enabled').checked = apiConfig.temperatureEnabled !== false;
     document.getElementById('setting-temperature').disabled = apiConfig.temperatureEnabled === false;
     document.getElementById('setting-max-tokens').value = apiConfig.maxTokens || '';
-    // 底层字段合成思考模式：原生推理优先（reasoningEffort 非 off 或 deepseekThinking），其次提示词思维链
-    let thinkingMode = 'off';
-    if ((apiConfig.reasoningEffort && apiConfig.reasoningEffort !== 'off') || apiConfig.deepseekThinking === true) {
-      thinkingMode = 'native';
-    } else if (apiConfig.enableThinking === true) {
-      thinkingMode = 'prompt';
-    }
-    document.getElementById('setting-thinking-mode').value = thinkingMode;
+    // 思考开关：两个独立开关分别回填（可叠加）
+    const nativeOn = (apiConfig.reasoningEffort && apiConfig.reasoningEffort !== 'off') || apiConfig.deepseekThinking === true;
+    document.getElementById('setting-enable-thinking').checked = apiConfig.enableThinking === true;
+    document.getElementById('setting-native-thinking').checked = nativeOn;
     document.getElementById('setting-prefill-thinking').checked = apiConfig.prefillThinking === true;
     document.getElementById('setting-reasoning-effort').value = ['low', 'medium', 'high'].includes(apiConfig.reasoningEffort) ? apiConfig.reasoningEffort : 'medium';
     document.getElementById('setting-deepseek-effort').value = apiConfig.deepseekReasoningEffort || 'high';

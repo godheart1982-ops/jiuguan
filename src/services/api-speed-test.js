@@ -183,7 +183,7 @@ export function runSpeedTestRound(apiConfig, prompt) {
     };
     // 思考显隐跟随配置：显示推理时思考块也触发 onChunk，TTFT = 首个可见 token（与聊天页观感一致）
     const parseLine = apiConfig.deepseekThinking
-      ? makeOpenAISSEParser(callbacks, { showThinking: apiConfig.showThinking !== false, onUsage: callbacks.onUsage })
+      ? makeOpenAISSEParser(callbacks, { showThinking: apiConfig.showThinking === true, onUsage: callbacks.onUsage })
       : (line) => parseSSELine(line, callbacks.onChunk, callbacks.onUsage);
     sendChatStreamAuto(url, headers, JSON.stringify(body), controller, callbacks, parseLine)
       .catch((e) => {

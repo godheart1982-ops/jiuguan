@@ -82,9 +82,9 @@ export async function sendChat(messages, options = {}) {
       }
       const msg = data.choices?.[0]?.message;
       const content = msg?.content || '';
-      // DeepSeek 推理模式：reasoning_content 拼入正文前
+      // DeepSeek 推理模式：reasoning_content 拼入正文前（显隐规则与 Anthropic 侧统一：显式开启才显示）
       if (useApi.deepseekThinking && msg?.reasoning_content) {
-        if (useApi.showThinking !== false) {
+        if (useApi.showThinking === true) {
           return `<思考>\n${msg.reasoning_content}\n</思考>\n\n${content}`;
         }
       }
@@ -203,9 +203,9 @@ export function sendChatStream(messages, callbacks, usageContext = {}) {
         recordUsage(usage, 'openai', { ...usageContext, model: api.model });
         if (cb.onUsage) cb.onUsage(usage);
       };
-      // DeepSeek 推理模式用专用解析器，否则用通用 parseSSELine
+      // DeepSeek 推理模式用专用解析器，否则用通用 parseSSELine（推理显隐：显式开启才显示）
       const parseLine = api.deepseekThinking
-        ? makeOpenAISSEParser(trackedCb, { showThinking: api.showThinking !== false, onUsage })
+        ? makeOpenAISSEParser(trackedCb, { showThinking: api.showThinking === true, onUsage })
         : (line) => parseSSELine(line, trackedCb.onChunk, onUsage);
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
