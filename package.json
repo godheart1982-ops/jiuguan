@@ -14,7 +14,8 @@
     "build:web": "node scripts/build-web.js",
     "build:all": "npm run build:win && npm run build:android && npm run build:web",
     "test": "node --test \"tests/*.test.mjs\"",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "postinstall": "patch-package"
   },
   "keywords": [
     "ai",
@@ -64,7 +65,8 @@
     "electron-builder": "^25.0.0",
     "esbuild": "^0.28.1",
     "eslint": "^10.8.0",
-    "globals": "^17.8.0"
+    "globals": "^17.8.0",
+    "patch-package": "^8.0.1"
   },
   "dependencies": {
     "@capacitor-community/keep-awake": "^8.0.1",
