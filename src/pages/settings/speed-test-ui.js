@@ -18,11 +18,12 @@ export function createSpeedTestController(deps) {
   let running = false;
 
   function thinkingInfoOf(apiConfig) {
-    const nativeOn = (apiConfig.reasoningEffort && apiConfig.reasoningEffort !== 'off') || apiConfig.deepseekThinking === true;
-    const promptOn = apiConfig.enableThinking === true;
-    if (nativeOn && promptOn) return { mode: 'both', label: '原生推理+思维链' };
-    if (nativeOn) return { mode: 'native', label: '原生推理' };
-    if (promptOn) return { mode: 'prompt', label: '提示词思维链' };
+    if ((apiConfig.reasoningEffort && apiConfig.reasoningEffort !== 'off') || apiConfig.deepseekThinking === true) {
+      return { mode: 'native', label: '原生推理' };
+    }
+    if (apiConfig.enableThinking === true) {
+      return { mode: 'prompt', label: '提示词思维链' };
+    }
     return { mode: 'off', label: '关闭' };
   }
 
