@@ -218,7 +218,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             </select>
             <button class="btn btn-danger btn-small btn-del-promise" data-index="${index}">删除</button>
           </div>
-          <input type="text" class="form-input fact-promise-text" data-index="${index}" value="${escapeHtml(p.text)}" placeholder="约定内容">
+          <input type="text" class="form-input fact-promise-text" data-index="${index}" value="${escapeHtml(p.text)}" placeholder="约定内容（敷衍/欺骗式承诺前加【敷衍】【谎言】标记）">
         </div>
       `).join('');
       const relationRows = (factsEdit.relations || []).map((r, index) => `
