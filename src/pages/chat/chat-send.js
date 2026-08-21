@@ -7,7 +7,8 @@ import { sendChat, sendChatStream } from '../../services/api.js';
 import {
   summarizeTurn, trimAssistantForMemory, resolveMemoryApi,
   applyTurnFactsToMemory, RAW_WINDOW_TURNS,
-  extractMemoryCorrections
+  extractMemoryCorrections, extractMemoryRecalls, ensureLongTermMeta,
+  RECALL_PER_TURN_LIMIT
 } from '../../services/api-memory.js';
 import { updateGenerationForeground } from '../../services/foreground.js';
 import { ensurePollinationsAnchors } from '../../services/image-gen.js';
@@ -268,6 +269,22 @@ export function createSendController(deps) {
                 }
               }
 
+              // 远期记忆调取：AI 末尾标记的「记忆调取：#N」落盘，下一轮 buildMessages 一次性注入该条全文；
+              // 本轮若无新请求则清除已消费的 pendingRecalls（一次性注入，不常驻）
+              if (chat.memory && Array.isArray(chat.memory.longTerm)) {
+                const recalls = extractMemoryRecalls(assistantMsg.content)
+                  .filter(n => n >= 1 && n <= chat.memory.longTerm.length)
+                  .slice(0, RECALL_PER_TURN_LIMIT);
+                if (recalls.length) {
+                  chat.memory.pendingRecalls = recalls;
+                  await saveChat(chat).catch(() => {});
+                  showMemoryStatus('已调取远期记忆 #' + recalls.join('、#') + '（下轮生效）', 'info');
+                } else if (chat.memory.pendingRecalls) {
+                  delete chat.memory.pendingRecalls;
+                  await saveChat(chat).catch(() => {});
+                }
+              }
+
               // 插图种子归档：扫描本轮回复中的插图 URL，自动维护种子档案（本地正则，不调 AI）
               // 插图种子归档：只登记新角色（基准锁定），已有角色的 seed 永不覆盖——
               // AI 按规则从档案基准做 1-20 偏移让构图随剧情变，档案本身保持基准不漂移
@@ -338,6 +355,16 @@ export function createSendController(deps) {
                 // 跳过的轮次不丢：回到该对话后的下一次回复会经 catch-up 补总结
                 const chat = getChat();
                 if (!chat || chat.id !== memoryChatId) return;
+                // 老长期记忆一次性升级：补目录标题与召回关键词（副 API 一次，全部标记 metaDone 后不再触发）
+                if (Array.isArray(chat.memory.longTerm) && chat.memory.longTerm.some(lt => lt && lt.content && lt.metaDone !== true)) {
+                  try {
+                    showMemoryStatus('正在升级长期记忆目录…', 'info');
+                    await ensureLongTermMeta(chat.memory);
+                    await saveChat(chat).catch(() => {});
+                  } catch (e) {
+                    console.warn('长期记忆目录升级失败:', e);
+                  }
+                }
                 // 摘要上下文：人名参照 + 最近两条短期摘要（指代消解用；随 catch-up 推进自动滚动）
                 // + 记忆修正行（从当轮回复【全文】机械提取——裁切后的总结文本可能已丢掉末尾修正行）
                 // + 约定/关系/情报当前清单（全量重写：AI 拿着旧清单逐条核对，对齐文本后整体替换）

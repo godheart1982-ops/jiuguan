@@ -12,7 +12,11 @@ import {
   trimAssistantForMemory,
   extractMemoryCorrections,
   parseTurnSummary,
-  formatLongTermReference
+  formatLongTermReference,
+  formatLongTermInjection,
+  extractMemoryRecalls,
+  matchLongTermRecalls,
+  LONG_TERM_FULL_COUNT
 } from '../src/services/api-memory.js';
 
 // ---------- normalizeFacts ----------
@@ -326,4 +330,71 @@ test('extractMemoryCorrections: 行首引用符与空白可容忍；无修正返
 
 test('extractMemoryCorrections: 行中途出现的「记忆修正」不算（必须行首）', () => {
   assert.deepEqual(extractMemoryCorrections('她说：记忆修正：这个不算'), []);
+});
+
+// ---------- 长期记忆分层注入（全文区 / 远期目录 / 调取） ----------
+
+function makeLongEntries(n) {
+  return Array.from({ length: n }, (_, i) => ({
+    startDate: `2026-08-${String(i + 1).padStart(2, '0')}`,
+    endDate: `2026-08-${String(i + 1).padStart(2, '0')}`,
+    content: `第${i + 1}条剧情的完整内容`,
+    title: `第${i + 1}条标题`,
+    recallKeys: [`专名${i + 1}号`],
+    metaDone: true
+  }));
+}
+
+test('formatLongTermInjection: 不超过全文区条数时全部全文、无目录', () => {
+  const { text, fullIndices } = formatLongTermInjection(makeLongEntries(3));
+  assert.ok(text.includes('第1条剧情的完整内容'));
+  assert.ok(text.includes('第3条剧情的完整内容'));
+  assert.ok(!text.includes('远期记忆目录'));
+  assert.equal(fullIndices.size, 3);
+});
+
+test('formatLongTermInjection: 超出全文区后旧条目降级为目录行（带绝对编号与标题）', () => {
+  const list = makeLongEntries(LONG_TERM_FULL_COUNT + 2);
+  const { text, fullIndices } = formatLongTermInjection(list);
+  assert.ok(text.includes('远期记忆目录'));
+  // 最旧两条进目录，最新 10 条全文
+  assert.ok(text.includes('#1 【2026-08-01】第1条标题'));
+  assert.ok(text.includes('#2 【2026-08-02】第2条标题'));
+  assert.ok(!text.includes('第1条剧情的完整内容'));
+  assert.ok(text.includes('第12条剧情的完整内容'));
+  assert.equal(fullIndices.size, LONG_TERM_FULL_COUNT);
+  assert.ok(!fullIndices.has(0) && !fullIndices.has(1));
+});
+
+test('formatLongTermInjection: 加星旧条目保持全文且不进目录', () => {
+  const list = makeLongEntries(LONG_TERM_FULL_COUNT + 2);
+  list[0].pinned = true;
+  const { text, fullIndices } = formatLongTermInjection(list);
+  assert.ok(fullIndices.has(0));
+  assert.ok(text.includes('第1条剧情的完整内容'));
+  assert.ok(!text.includes('#1 【2026-08-01】第1条标题'));
+});
+
+test('formatLongTermInjection: 老条目无 title 时以 content 截断兜底', () => {
+  const list = makeLongEntries(LONG_TERM_FULL_COUNT + 1);
+  delete list[0].title;
+  const { text } = formatLongTermInjection(list);
+  assert.ok(text.includes('#1 【2026-08-01】第1条剧情的完整内容'.slice(0, 30)));
+});
+
+test('extractMemoryRecalls: 提取调取编号并去重；行中途出现不算', () => {
+  const content = '正文\n记忆调取：#3\n记忆调取: #5、#3\n她说：记忆调取：#9\n';
+  assert.deepEqual(extractMemoryRecalls(content).sort(), [3, 5]);
+});
+
+test('matchLongTermRecalls: 命中目录区 recallKeys，全文区跳过，无 keys 跳过', () => {
+  const list = makeLongEntries(LONG_TERM_FULL_COUNT + 2);
+  const { fullIndices } = formatLongTermInjection(list);
+  // 全文区第12条的关键词不该命中
+  assert.deepEqual(matchLongTermRecalls(list, '我想起专名12号了', fullIndices), []);
+  // 目录区命中：同命中数时较新的条目优先
+  assert.deepEqual(matchLongTermRecalls(list, '专名1号 和 专名2号 都提了', fullIndices), [2, 1]);
+  // 无 recallKeys 的老条目不参与
+  delete list[0].recallKeys;
+  assert.deepEqual(matchLongTermRecalls(list, '专名1号', fullIndices), []);
 });

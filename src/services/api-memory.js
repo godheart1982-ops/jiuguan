@@ -490,6 +490,157 @@ export function formatLongTermReference(entries) {
     .join('\n\n');
 }
 
+// ---------- 长期记忆分层注入（全文区 / 远期目录 / 调取） ----------
+
+// 全文区条数：加星条目 + 最近 N 条未加星条目全文注入；更早的降级为目录行
+export const LONG_TERM_FULL_COUNT = 10;
+// 目录行最多列出的条数（最旧的超出部分只存不列）
+export const LONG_TERM_CATALOG_LIMIT = 50;
+// 每轮调取/召回注入上限
+export const RECALL_PER_TURN_LIMIT = 2;
+
+/** 目录标题兜底：无 title 的老条目取 content 压平截断 */
+function fallbackLongTermTitle(content) {
+  const flat = String(content || '').replace(/\s+/g, ' ').trim();
+  return flat.length > 25 ? flat.slice(0, 25) : flat;
+}
+
+/** 目录行标题：优先压缩时生成的 title，老条目兜底截断 */
+export function longTermTitleOf(entry) {
+  const t = String((entry && entry.title) || '').trim();
+  return t || fallbackLongTermTitle(entry && entry.content);
+}
+
+/**
+ * 长期记忆注入文本：全文区（加星 + 最近 N 条）+ 远期目录 + 调取说明
+ * 编号 = 条目在 longTerm 数组中的绝对序号（1-based），目录与「记忆调取：#N」凭它对齐
+ * @returns {{ text: string, fullIndices: Set<number> }} fullIndices 为全文区的 0-based 下标（一次性注入去重用）
+ */
+export function formatLongTermInjection(longTerm) {
+  const list = (Array.isArray(longTerm) ? longTerm : []).filter(lt => lt && lt.content);
+  const fullIndices = new Set();
+  if (!list.length) return { text: '', fullIndices };
+  list.forEach((lt, i) => { if (lt.pinned === true) fullIndices.add(i); });
+  const unpinned = list.map((_, i) => i).filter(i => !fullIndices.has(i));
+  unpinned.slice(-LONG_TERM_FULL_COUNT).forEach(i => fullIndices.add(i));
+
+  const fullText = list
+    .map((lt, i) => {
+      const start = lt.startDate || '';
+      const end = lt.endDate || start;
+      const header = start === end ? `【${start}】` : `【${start} 至 ${end}】`;
+      return { i, block: header + '\n' + (lt.content || '') };
+    })
+    .filter(x => fullIndices.has(x.i))
+    .map(x => x.block)
+    .join('\n\n');
+
+  const catalog = list
+    .map((lt, i) => ({ lt, i }))
+    .filter(x => !fullIndices.has(x.i))
+    .slice(-LONG_TERM_CATALOG_LIMIT)
+    .map(({ lt, i }) => {
+      const start = lt.startDate || '';
+      const end = lt.endDate || start;
+      const date = start === end ? `【${start}】` : `【${start} 至 ${end}】`;
+      return `#${i + 1} ${date}${longTermTitleOf(lt)}`;
+    });
+
+  let text = fullText;
+  if (catalog.length) {
+    text += (text ? '\n\n' : '') +
+      '【远期记忆目录】（更早的长期记忆仅列目录；若本轮剧情涉及某条目录所述的人或事而你想不起细节，在回复末尾输出「记忆调取：#编号」，该条全文将于下一轮注入。仅在确有指向时调取、每轮最多 ' + RECALL_PER_TURN_LIMIT + ' 条、无指向禁止输出）\n' +
+      catalog.join('\n');
+  }
+  return { text, fullIndices };
+}
+
+/** 从 AI 回复机械提取「记忆调取：#N」（记忆调取通道；不调 AI） */
+export function extractMemoryRecalls(content) {
+  if (!content || typeof content !== 'string') return [];
+  const found = [];
+  for (const m of content.matchAll(/^[>\s]*记忆调取[：:][ \t]*(.+)$/gm)) {
+    for (const n of (m[1] || '').matchAll(/#?\s*(\d{1,4})/g)) {
+      found.push(parseInt(n[1], 10));
+    }
+  }
+  return [...new Set(found)].filter(Number.isFinite);
+}
+
+/**
+ * 主控输入关键词召回：用户输入命中目录区条目的 recallKeys，返回绝对序号（1-based，命中数降序）
+ * 全文区条目无需召回（已在注入）；无 recallKeys 的老条目不参与（等 ensureLongTermMeta 升级）
+ */
+export function matchLongTermRecalls(longTerm, userText, fullIndices, limit = RECALL_PER_TURN_LIMIT) {
+  const text = String(userText || '');
+  const list = (Array.isArray(longTerm) ? longTerm : []);
+  const full = fullIndices instanceof Set ? fullIndices : new Set();
+  if (!text.trim() || !list.length) return [];
+  const scored = [];
+  list.forEach((lt, i) => {
+    if (!lt || !lt.content || full.has(i)) return;
+    const keys = Array.isArray(lt.recallKeys) ? lt.recallKeys : [];
+    let hits = 0;
+    for (const k of keys) {
+      const key = String(k || '').trim();
+      if (key.length >= 2 && text.includes(key)) hits++;
+    }
+    if (hits > 0) scored.push({ n: i + 1, hits });
+  });
+  scored.sort((a, b) => (b.hits - a.hits) || (b.n - a.n));
+  return scored.slice(0, limit).map(s => s.n);
+}
+
+/**
+ * 老格式一次性升级：为未标记 metaDone 的长期记忆批量生成目录标题与召回关键词（一次副 API 调用）
+ * AI 失败或未覆盖的条目用兜底标题保底（目录立即可用，recallKeys 留空=不参与关键词召回）
+ * 处理过的条目标 metaDone=true，不重复调用；新格式压缩产出的条目自带元数据与本标记
+ * @returns {Promise<number>} 本次处理的条数（0 = 无需升级）
+ */
+export async function ensureLongTermMeta(memory) {
+  const list = memory && Array.isArray(memory.longTerm) ? memory.longTerm : [];
+  const targets = list.filter(lt => lt && lt.content && lt.metaDone !== true);
+  if (!targets.length) return 0;
+
+  const config = await getConfig();
+  const memApi = resolveMemoryApi((config && config.api) || {});
+  if (memApi.baseUrl && memApi.apiKey && memApi.model) {
+    const chunk = targets.slice(0, 40);
+    const prompt = `以下是 ${chunk.length} 条历史剧情记忆，请为每一条生成：
+1. title：目录标题，≤25字，必须含关键人名与核心事件（示范：与苏晴地铁偶遇并交换联系方式）
+2. recallKeys：3-5个召回关键词，选人名/地名/事件专名，禁止泛用词（如"医院""吃饭"）
+只输出一个 JSON 数组，不要任何额外解释：[{"i":1,"title":"…","recallKeys":["…"]}]，i 为条目序号。
+
+条目：
+` + chunk.map((lt, idx) => `${idx + 1}. 【${lt.startDate || ''}】${lt.content}`).join('\n\n');
+    try {
+      const raw = await sendChat([
+        { role: 'system', content: '你是记忆索引助手。只输出 JSON 数组。' },
+        { role: 'user', content: prompt }
+      ], { api: memApi, usageContext: { kind: 'memory' } });
+      const arr = parseJsonOrText(raw);
+      if (Array.isArray(arr)) {
+        for (const item of arr) {
+          const t = chunk[(item && item.i) - 1];
+          if (!t || !item || !item.title) continue;
+          t.title = String(item.title).replace(/\s+/g, ' ').trim().slice(0, 40);
+          t.recallKeys = (Array.isArray(item.recallKeys) ? item.recallKeys : [])
+            .map(k => String(k || '').trim()).filter(k => k.length >= 2).slice(0, 5);
+        }
+      }
+    } catch (e) {
+      console.warn('长期记忆目录元数据 AI 生成失败，改用兜底标题:', e);
+    }
+  }
+  // 兜底与封档：未被 AI 覆盖的给兜底标题；全部标记 metaDone，不再重复处理
+  for (const lt of targets) {
+    if (!String(lt.title || '').trim()) lt.title = fallbackLongTermTitle(lt.content);
+    if (!Array.isArray(lt.recallKeys)) lt.recallKeys = [];
+    lt.metaDone = true;
+  }
+  return targets.length;
+}
+
 /**
  * 调用 AI 把短期记忆合并为一条长期记忆
  * 纪律：旧长期只读参考、严禁并入或重写；新条目自包含；每段记忆一生只被压缩一次
@@ -536,9 +687,10 @@ export async function summarizeShortTermMemories(shortTerm, context = {}) {
 3. 世界事件已由「事实备忘」单独维护，content 不必再抄公共事件追踪表；若旧摘要里仍有"｜世界："字样可忽略或并入叙述一句即可。
 4. 输出一条 JSON，不要任何额外解释。
 5. JSON 格式必须严格如下：
-   {"startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD","content":"长期记忆摘要"}
+   {"startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD","content":"长期记忆摘要","title":"目录标题≤25字，含关键人名与核心事件（示范：与苏晴地铁偶遇并交换联系方式）","recallKeys":["3-5个召回关键词，选人名/地名/事件专名，禁止泛用词"]}
 6. startDate 建议使用 ${firstDate}，endDate 建议使用 ${lastDate}（如果跨度更大可以调整）。
 7. content 用一段连贯的中文叙述，不要分点，不要罗列日期。
+8. title 是给远期记忆目录用的一句话索引，recallKeys 用于用户提及旧事时的机械召回，两者都必须脱离 content 也成立。
 ${refNote}${factsNote}
 短期记忆：
 ${formatted}
@@ -554,14 +706,20 @@ ${formatted}
 
   const parsed = parseJsonOrText(raw);
   if (parsed && typeof parsed.content === 'string') {
+    const title = String(parsed.title || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    const recallKeys = (Array.isArray(parsed.recallKeys) ? parsed.recallKeys : [])
+      .map(k => String(k || '').trim()).filter(k => k.length >= 2).slice(0, 5);
     return {
       startDate: parsed.startDate || firstDate,
       endDate: parsed.endDate || lastDate,
-      content: parsed.content.trim()
+      content: parsed.content.trim(),
+      title: title || fallbackLongTermTitle(parsed.content),
+      recallKeys,
+      metaDone: true
     };
   }
 
-  return { startDate: firstDate, endDate: lastDate, content: raw.trim() };
+  return { startDate: firstDate, endDate: lastDate, content: raw.trim(), title: fallbackLongTermTitle(raw), recallKeys: [], metaDone: true };
 }
 
 /**

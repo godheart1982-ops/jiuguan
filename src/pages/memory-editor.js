@@ -175,6 +175,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             <div class="memory-card-header memory-card-header-long">
               <div class="memory-card-row-top">
                 <span class="memory-round-badge">${formatRoundRange(item.sourceRounds)}</span>
+                <button class="btn ${item.pinned ? 'btn-primary' : 'btn-ghost'} btn-small btn-pin-long" data-index="${index}" title="加星常驻：全文注入，永不降级为目录">★</button>
                 <button class="btn btn-danger btn-small btn-delete-long" data-index="${index}">删除</button>
               </div>
               <div class="memory-date-range">
@@ -183,6 +184,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
                 <input type="date" class="form-input memory-date-input" value="${escapeHtml(item.endDate || '')}">
               </div>
             </div>
+            <input type="text" class="form-input memory-long-title" value="${escapeHtml(item.title || '')}" placeholder="目录标题（≤25字，含人名与事件；降级为目录后凭它召回）" style="margin-bottom:6px;">
             <textarea class="form-textarea memory-content memory-long-content" placeholder="长期记忆内容（点击展开大窗口编辑）" rows="3" readonly>${escapeHtml(item.content || '')}</textarea>
           </div>
         `).join('');
@@ -598,6 +600,8 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       const endDateInput = dateInputs[1];
       const contentTextarea = card.querySelector('.memory-long-content');
       const deleteBtn = card.querySelector('.btn-delete-long');
+      const pinBtn = card.querySelector('.btn-pin-long');
+      const titleInput = card.querySelector('.memory-long-title');
 
       const syncDatesToState = () => {
         longTermMemories[index].startDate = startDateInput.value;
@@ -612,6 +616,17 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         longTermMemories.splice(index, 1);
         renderContent();
         updateCounter();
+      });
+
+      // 加星常驻：全文注入、永不降级为目录行（主线/承重记忆用）
+      pinBtn.addEventListener('click', () => {
+        longTermMemories[index].pinned = !longTermMemories[index].pinned;
+        renderContent();
+        updateCounter();
+      });
+
+      titleInput.addEventListener('change', () => {
+        longTermMemories[index].title = titleInput.value.trim();
       });
 
       contentTextarea.addEventListener('click', () => {

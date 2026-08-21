@@ -7,7 +7,7 @@ import { EVENT_SYSTEM_RULE, RANDOM_NPC_RULE, IMMERSIVE_ACTING_RULE } from './nar
 import { isPaidImageProvider } from './image-gen.js';
 import { sanitizeHistoryIllustrationMarkers } from './illustration-markers.js';
 import { resolveWorldBookInjection } from './world-book.js';
-import { formatFactsMemo } from './api-memory.js';
+import { formatFactsMemo, formatLongTermInjection, matchLongTermRecalls, RECALL_PER_TURN_LIMIT } from './api-memory.js';
 
 // 思维链预填充文本：开启后追加为 messages 最后一条 assistant 消息，强制模型从此处续写
 export const THINKING_PREFILL = '<思考>';
@@ -133,9 +133,26 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   const memoryOn = character.memoryEnabled !== false;
 
   if (memoryOn && memory && memory.longTerm) {
-    const longTermText = formatLongTermMemory(memory.longTerm);
+    const { text: longTermText, fullIndices } = formatLongTermInjection(memory.longTerm);
     if (longTermText) {
       systemContent += '\n\n【长期记忆】（以下内容优先于角色卡初始设定，关系与角色状态以长期记忆为准）\n' + longTermText;
+    }
+    // 远期记忆一次性调取注入：AI 上轮「记忆调取」请求的 + 主控本轮输入关键词命中的（仅本轮有效，不进常驻）
+    const recallSet = new Set();
+    (Array.isArray(memory.pendingRecalls) ? memory.pendingRecalls : []).forEach(n => { if (Number.isInteger(n)) recallSet.add(n); });
+    matchLongTermRecalls(memory.longTerm, userMessage, fullIndices).forEach(n => recallSet.add(n));
+    const recalled = [...recallSet]
+      .filter(n => n >= 1 && n <= memory.longTerm.length && !fullIndices.has(n - 1))
+      .slice(0, RECALL_PER_TURN_LIMIT);
+    if (recalled.length) {
+      systemContent += '\n\n【远期记忆·调取全文】（以下条目因调取请求/关键词命中临时注入，仅本轮有效）\n' +
+        recalled.map(n => {
+          const lt = memory.longTerm[n - 1];
+          const start = (lt && lt.startDate) || '';
+          const end = (lt && lt.endDate) || start;
+          const header = start === end ? `【${start}】` : `【${start} 至 ${end}】`;
+          return `#${n} ${header}\n${(lt && lt.content) || ''}`;
+        }).join('\n\n');
     }
   }
 
@@ -230,17 +247,6 @@ function sliceRecentTurns(history, maxTurns) {
     }
   }
   return history.slice(start);
-}
-
-function formatLongTermMemory(longTerm) {
-  if (!Array.isArray(longTerm) || longTerm.length === 0) return '';
-
-  return longTerm.map(entry => {
-    const start = entry.startDate || '';
-    const end = entry.endDate || start;
-    const header = start === end ? `【${start}】` : `【${start} 至 ${end}】`;
-    return header + '\n' + (entry.content || '');
-  }).join('\n\n');
 }
 
 function formatShortTermMemory(shortTerm) {
