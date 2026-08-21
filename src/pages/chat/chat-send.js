@@ -6,7 +6,7 @@ import { THINKING_PREFILL, buildMessages } from '../../services/api-messages.js'
 import { sendChat, sendChatStream } from '../../services/api.js';
 import {
   summarizeTurn, trimAssistantForMemory, resolveMemoryApi,
-  extractKnownWorldEvents, applyTurnFactsToMemory, RAW_WINDOW_TURNS,
+  applyTurnFactsToMemory, RAW_WINDOW_TURNS,
   extractMemoryCorrections
 } from '../../services/api-memory.js';
 import { updateGenerationForeground } from '../../services/foreground.js';
@@ -427,7 +427,6 @@ export function createSendController(deps) {
                         target.user.content,
                         assistantForMemory,
                         sceneDate,
-                        extractKnownWorldEvents(chat.memory),
                         memoryContext(target.assistant.content)
                       );
                       const exists = chat.memory.shortTerm.some(s => s.turnTimestamp === target.user.timestamp);
@@ -466,7 +465,6 @@ export function createSendController(deps) {
                           retryUser,
                           retryAi,
                           retryDate,
-                          extractKnownWorldEvents(chat.memory),
                           memoryContext(retryFullContent)
                         );
                         const existsRetry = chat.memory.shortTerm.some(s => s.turnTimestamp === retryTimestamp);

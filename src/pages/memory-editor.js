@@ -148,7 +148,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   function factsCount() {
     return (factsEdit.promises?.length || 0)
       + (factsEdit.relations?.length || 0)
-      + (factsEdit.worldEvents?.length || 0)
       + (factsEdit.intel?.length || 0);
   }
 
@@ -231,12 +230,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
           <input type="text" class="form-input fact-rel-note" data-index="${index}" value="${escapeHtml(r.note || '')}" placeholder="身份关系+状态词（如：同班同学，暧昧）">
         </div>
       `).join('');
-      const worldRows = (factsEdit.worldEvents || []).map((w, index) => `
-        <div class="memory-card" style="display:flex; gap:8px; align-items:center;">
-          <input type="text" class="form-input fact-world-text" data-index="${index}" value="${escapeHtml(w.text)}" placeholder="事件→阶段" style="flex:1;">
-          <button class="btn btn-danger btn-small btn-del-world" data-index="${index}">删除</button>
-        </div>
-      `).join('');
       const intelRows = (factsEdit.intel || []).map((item, index) => `
         <div class="memory-card" style="display:flex; flex-direction:column; gap:6px;">
           <div style="display:flex; gap:8px; align-items:center;">
@@ -251,7 +244,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       <div class="memory-section">
         <div class="memory-section-title">事实备忘</div>
         <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 12px;">
-          由每轮记忆总结自动抽取并合并；压缩短期/长期<strong>不会清空</strong>本页。世界事件与知情情报只记在本页。发送时注入 system【事实备忘】（含知情约束）。可在此手改。
+          由每轮记忆总结自动抽取并合并；压缩短期/长期<strong>不会清空</strong>本页。发送时注入 system【事实备忘】（含知情约束）。可在此手改。约定/情报有录入门槛（跨轮才兑现的约定、有保密价值的情报），清单常年应保持很少。
         </div>
         <div class="memory-section-title" style="font-size:0.95rem;">未完成/历史约定（${factsEdit.promises.length}）</div>
         <div class="memory-list">${promiseRows || '<div class="memory-empty">暂无约定</div>'}</div>
@@ -259,9 +252,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         <div class="memory-section-title" style="font-size:0.95rem;">人物关系（${factsEdit.relations.length}）</div>
         <div class="memory-list">${relationRows || '<div class="memory-empty">暂无关系记录</div>'}</div>
         <button class="btn btn-ghost btn-small" id="btn-add-rel" style="margin:8px 0 16px;">＋ 添加关系</button>
-        <div class="memory-section-title" style="font-size:0.95rem;">世界事件（${factsEdit.worldEvents.length}）</div>
-        <div class="memory-list">${worldRows || '<div class="memory-empty">暂无世界事件</div>'}</div>
-        <button class="btn btn-ghost btn-small" id="btn-add-world" style="margin:8px 0 16px;">＋ 添加事件</button>
         <div class="memory-section-title" style="font-size:0.95rem;">知情情报（${(factsEdit.intel || []).length}）</div>
         <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">
           每条情报 + knownBy（谁可当已知；全员可用「公开」）。与约定/关系常一起变。注入时生成硬性知情约束。
@@ -314,23 +304,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       });
       contentEl.querySelector('#btn-add-rel')?.addEventListener('click', () => {
         factsEdit.relations.push({ name: '', note: '' });
-        renderContent();
-      });
-
-      contentEl.querySelectorAll('.fact-world-text').forEach((input) => {
-        input.addEventListener('change', () => {
-          const i = parseInt(input.dataset.index, 10);
-          if (factsEdit.worldEvents[i]) factsEdit.worldEvents[i].text = input.value.trim();
-        });
-      });
-      contentEl.querySelectorAll('.btn-del-world').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          factsEdit.worldEvents.splice(parseInt(btn.dataset.index, 10), 1);
-          renderContent();
-        });
-      });
-      contentEl.querySelector('#btn-add-world')?.addEventListener('click', () => {
-        factsEdit.worldEvents.push({ text: '' });
         renderContent();
       });
 
@@ -698,10 +671,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         const i = parseInt(input.dataset.index, 10);
         if (factsEdit.relations[i]) factsEdit.relations[i].note = input.value.trim();
       });
-      contentEl.querySelectorAll('.fact-world-text').forEach((input) => {
-        const i = parseInt(input.dataset.index, 10);
-        if (factsEdit.worldEvents[i]) factsEdit.worldEvents[i].text = input.value.trim();
-      });
       contentEl.querySelectorAll('.fact-intel-text').forEach((input) => {
         const i = parseInt(input.dataset.index, 10);
         if (factsEdit.intel[i]) factsEdit.intel[i].text = input.value.trim();
@@ -724,10 +693,10 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       chat.memory.shortTerm = newShortTerm;
       chat.memory.longTerm = newLongTerm;
       // 事实备忘（过滤空行；含知情情报 intel + knownBy）
+      // worldEvents 已废弃（与状态栏事件追踪重复）：不再保存，旧数据在此处自然清除
       chat.memory.facts = normalizeFacts({
         promises: (factsEdit.promises || []).filter((p) => p && String(p.text || '').trim()),
         relations: (factsEdit.relations || []).filter((r) => r && String(r.name || '').trim()),
-        worldEvents: (factsEdit.worldEvents || []).filter((w) => w && String(w.text || '').trim()),
         intel: (factsEdit.intel || [])
           .filter((i) => i && String(i.text || '').trim())
           .map((i) => ({

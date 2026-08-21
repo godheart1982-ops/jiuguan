@@ -42,14 +42,6 @@ export function extractWorldEventMarkers(shortTerm) {
   return [...new Set(found)];
 }
 
-/** 从 shortTerm 散文 + memory.facts.worldEvents 汇总已知世界事件（供摘要去重） */
-export function extractKnownWorldEvents(memory) {
-  const fromShort = extractWorldEventMarkers(memory && memory.shortTerm);
-  const facts = normalizeFacts(memory && memory.facts);
-  const fromFacts = facts.worldEvents.map((w) => w.text).filter(Boolean);
-  return [...new Set([...fromShort, ...fromFacts])];
-}
-
 /**
  * 从 AI 回复中机械提取「记忆修正：」行（记忆修正通道；不调 AI）
  * 主模型上报的记忆矛盾，交总结 AI 按最高优先级合并进事实备忘
@@ -276,11 +268,6 @@ export function formatFactsMemo(factsRaw) {
       lines.push(`· ${r.name}${r.note ? '：' + r.note : ''}`);
     });
   }
-  if (facts.worldEvents.length) {
-    if (lines.length) lines.push('');
-    lines.push('进行中世界事件：');
-    facts.worldEvents.forEach((w) => lines.push(`· ${w.text}`));
-  }
   if (facts.intel.length) {
     if (lines.length) lines.push('');
     lines.push('知情约束【硬性】：写某角色的对话/心声/动机时，仅可使用 knownBy 含该角色名、或含「公开」的情报；禁止使用其不在名单中的情报。');
@@ -291,7 +278,7 @@ export function formatFactsMemo(factsRaw) {
   }
   if (!lines.length) return '';
   return (
-    '【事实备忘】（结构化硬事实，优先于模糊回忆；约定/事件/知情等硬事实与角色卡冲突时以本备忘与长期记忆为准；人物性格与态度以角色卡与剧情呈现为准；知情约束高于自由发挥）\n' +
+    '【事实备忘】（结构化硬事实，优先于模糊回忆；约定/关系/知情等硬事实与角色卡冲突时以本备忘与长期记忆为准；人物性格与态度以角色卡与剧情呈现为准；知情约束高于自由发挥）\n' +
     lines.join('\n')
   );
 }
@@ -382,7 +369,7 @@ function composeStructuredSummary(parsed) {
  * @param {Array<{text: string, knownBy: string[]}>} [context.currentIntel] 当前知情情报清单（全量重写核对用）
  * @returns {Promise<{date: string, content: string, promises: Array, relations: Array, worldEvents: string[], intel: Array}>}
  */
-export async function summarizeTurn(userContent, assistantContent, sceneDate, knownWorldEvents = [], context = {}) {
+export async function summarizeTurn(userContent, assistantContent, sceneDate, context = {}) {
   const config = await getConfig();
   const api = config.api || {};
 
@@ -392,11 +379,6 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, kn
   }
 
   const date = sceneDate || new Date().toISOString().slice(0, 10);
-
-  // 已知世界事件清单：跳过原样重复且阶段未变的事件
-  const worldNote = knownWorldEvents.length
-    ? `\n已知世界事件（已在事实备忘中）：${knownWorldEvents.join('；')}\n`
-    : '';
 
   // 人名参照与前情摘要：仅供指代消解，不参与总结
   const names = [context.characterName, context.mainControlName ? context.mainControlName + '（主控）' : '']
@@ -412,7 +394,7 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, kn
   // 记忆修正上报：主模型在回复末尾标记的记忆矛盾，按最高优先级并入事实清单
   const corrections = Array.isArray(context.corrections) ? context.corrections.filter(Boolean) : [];
   const correctionNote = corrections.length
-    ? `\n记忆修正【最高优先级】：本轮 AI 回复中包含以下记忆修正上报，视为对现有记忆的权威更正——请据此修正 promises/relations/worldEvents/intel（如更新 knownBy 名单、把已失效约定置为 done、更新关系 note、更正世界事件阶段）；修正内容本身不要写进 events/changes/mood：\n${corrections.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n`
+    ? `\n记忆修正【最高优先级】：本轮 AI 回复中包含以下记忆修正上报，视为对现有记忆的权威更正——请据此修正 promises/relations/intel（如更新 knownBy 名单、把已失效约定置为 done、更新关系 note）；修正内容本身不要写进 events/changes/mood：\n${corrections.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n`
     : '';
 
   // 当前未完成约定清单：AI 逐条核对后输出全量新清单（全量重写语义，
@@ -448,7 +430,6 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, kn
   "mood":"主要人物的情绪或态度转折，没有则留空",
   "promises":[{"text":"未完成或新产生的具体约定/承诺","status":"open或done"}],
   "relations":[{"name":"人物名","note":"身份关系+可选状态词（如「同班同学，暧昧」），≤15字"}],
-  "worldEvents":["事件名→阶段"],
   "intel":[{"text":"一条情报/秘密的简短陈述","knownBy":["可知此人的名字","主控"]}]
 }
 3. date 必须使用：${date}
@@ -459,12 +440,15 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, kn
    - 本轮完成/兑现/取消的约定：同样**原样照抄**清单中的文本，标 done；
    - 本轮新产生的约定：追加，标 open；
    - 清单为空且本轮无新约定时输出 []。不要编造。
+   记录门槛【三道闸，缺一不可】：①跨轮才兑现——当轮或下一轮就能随手完成的事不记；②有明确时点或触发条件——「周五来接我」记，「改天约/下次再说」不记；③不兑现会产生后果——忘了它剧情会矛盾或角色会生气的才记，纯社交寒暄、客套、无后续影响的口头约定一律不记。
+   照抄例外：不符合三道闸的旧约定直接标 done 移出 open 清单（视为自然淘汰）。
 7. relations【强制检查·全量重写】：输出本轮之后的**完整人物关系清单**——从上方「当前人物关系清单」逐条核对：没变的人物**原样照抄**（name 与 note 都不许改）；关系有实质变化的就地更新 note；新出现的重要人物追加。清单为空且本轮无新人物时输出 []。不要编造。
    note 格式【硬性】：只写身份关系+可选的简短状态词（如「同班同学，暧昧」「上下级，她手持裁员名单」「前妻，疏离」），≤15字；【禁止】态度描写（如"表面冷淡实则关心"）、动机/心理解释（如"因为愧疚"）、行为预测（如"会暗中帮他"）——人物性格与态度由角色卡与剧情呈现，不记入备忘。
    照抄例外：旧 note 若含态度/动机/行为描写或超过15字，就地精简为上述格式（保留身份关系与核心状态词）。
-8. worldEvents【强制检查】：若回复含「🌍世界信息」模块，其中【新事件】或【阶段有变化】的长期伏笔写入本数组，格式"事件→阶段"；与已知世界事件完全重复且阶段未变的不要写入；全部为"平稳无事/无"则 []。不要编造。
-9. intel【强制检查·全量重写】：输出本轮之后的**完整知情情报清单**——从上方「当前知情情报清单」逐条核对：没变的情报**原样照抄**（text 与 knownBy 都不许改）；知情范围有变化的，text 照抄并给出**当前**全量 knownBy（刚得知的人必须加入，仍应保密的人不得加入）；新出现的情报追加。knownBy 用角色名，全员公开可用「公开」。清单为空且本轮无新情报时输出 []。不要编造。
-${worldNote}${contextNote}${prevNote}${correctionNote}${openNote}${relNote}${intelNote}
+8. intel【强制检查·全量重写】：输出本轮之后的**完整知情情报清单**——从上方「当前知情情报清单」逐条核对：没变的情报**原样照抄**（text 与 knownBy 都不许改）；知情范围有变化的，text 照抄并给出**当前**全量 knownBy（刚得知的人必须加入，仍应保密的人不得加入）；新出现的情报追加。knownBy 用角色名，全员公开可用「公开」。清单为空且本轮无新情报时输出 []。不要编造。
+   记录门槛【三道闸，缺一不可】：①秘密性——有人刻意隐瞒或知情范围明显受限；双方共同经历的普通事件不记（在场者自然知道，无需追踪）；②会制约演绎——「某人不知道这件事」必须会影响他后续的言行（出轨的痕迹、未公开的裁员名单、瞒着主控的检查结果）；③有泄露路径——存在被不该知道的人撞破或透露的可能。公开信息、共同经历、无保密价值的日常一律不记。
+   照抄例外：不符合三道闸的旧情报直接移除（视为自然淘汰）。
+${contextNote}${prevNote}${correctionNote}${openNote}${relNote}${intelNote}
 当轮对话：
 用户：${sanitizeHistoryIllustrationMarkers(userContent)}
 
@@ -474,7 +458,7 @@ AI：${sanitizeHistoryIllustrationMarkers(assistantContent)}
   const messages = [
     {
       role: 'system',
-      content: '你是对话摘要与事实抽取助手。请严格按 JSON 输出。人名必须写具体名字，禁止任何指代词。世界事件放 worldEvents；知情放 intel（text+knownBy）。无则空字符串/空数组，禁止编造。'
+      content: '你是对话摘要与事实抽取助手。请严格按 JSON 输出。人名必须写具体名字，禁止任何指代词。知情放 intel（text+knownBy）。无则空字符串/空数组，禁止编造。'
     },
     { role: 'user', content: prompt }
   ];

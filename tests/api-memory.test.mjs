@@ -8,7 +8,6 @@ import {
   applyTurnFactsToMemory,
   formatFactsMemo,
   extractWorldEventMarkers,
-  extractKnownWorldEvents,
   parseWorldEventsFromContent,
   trimAssistantForMemory,
   extractMemoryCorrections,
@@ -189,7 +188,7 @@ test('formatFactsMemo: 已完成的约定不注入', () => {
   assert.equal(memo, '');
 });
 
-test('formatFactsMemo: 分区齐全且含硬性知情约束', () => {
+test('formatFactsMemo: 分区齐全且含硬性知情约束；worldEvents 已废弃不注入', () => {
   const memo = formatFactsMemo({
     promises: [{ text: '周五去看展', status: 'open' }],
     relations: [{ name: '艾莉娅', note: '同事' }],
@@ -203,7 +202,8 @@ test('formatFactsMemo: 分区齐全且含硬性知情约束', () => {
   assert.ok(memo.startsWith('【事实备忘】'));
   assert.ok(memo.includes('1. 周五去看展'));
   assert.ok(memo.includes('· 艾莉娅：同事'));
-  assert.ok(memo.includes('· 裁员评审→发酵'));
+  // worldEvents 已废弃（与状态栏事件追踪重复）：即使旧数据仍存，也不再注入
+  assert.ok(!memo.includes('裁员评审'));
   assert.ok(memo.includes('知情约束【硬性】'));
   assert.ok(memo.includes('· 「主控已婚」可知：主控'));
   assert.ok(memo.includes('· 「公司要裁员」可知：公开'));
@@ -218,15 +218,6 @@ test('extractWorldEventMarkers: 从短期记忆 content 提取并去重', () => 
     { content: '明天……｜世界：裁员评审→发酵\n另一行' }
   ];
   assert.deepEqual(extractWorldEventMarkers(shortTerm), ['裁员评审→发酵']);
-});
-
-test('extractKnownWorldEvents: 合并短期散文标记与事实备忘', () => {
-  const memory = {
-    shortTerm: [{ content: '……｜世界：地铁停运→平息' }],
-    facts: { worldEvents: [{ text: '裁员评审→发酵' }] }
-  };
-  const known = extractKnownWorldEvents(memory);
-  assert.deepEqual(known.sort(), ['地铁停运→平息', '裁员评审→发酵'].sort());
 });
 
 test('parseWorldEventsFromContent: 无标记返回空数组', () => {
