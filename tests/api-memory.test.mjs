@@ -41,7 +41,7 @@ test('normalizeFacts: 修剪空白、过滤空项、status 只认 done', () => {
     { text: '陪她去医院', status: 'done' },
     { text: '买牛奶', status: 'open' }
   ]);
-  assert.deepEqual(f.relations, [{ name: '艾莉娅', note: '同事' }]);
+  assert.deepEqual(f.relations, [{ from: '艾莉娅', to: '主控', note: '同事' }]);
   assert.deepEqual(f.worldEvents, [{ text: '裁员评审→发酵' }]);
   assert.deepEqual(f.intel, [{ text: '主控已婚', knownBy: [] }]);
 });
@@ -109,28 +109,30 @@ test('applyTurnFacts: 未提供 promises 字段时不动现有约定（回填安
   assert.deepEqual(memory.facts.worldEvents, [{ text: '地铁停运→开始' }]);
 });
 
-test('applyTurnFacts: relations 全量重写——未变的照抄、变化的更新、新增的追加', () => {
+test('applyTurnFacts: relations 全量重写——未变的照抄、变化的更新、新增的追加（边形态）', () => {
   const memory = { facts: emptyFacts() };
-  applyTurnFactsToMemory(memory, { relations: [{ name: '艾莉娅', note: '同事' }] });
+  applyTurnFactsToMemory(memory, { relations: [{ from: '艾莉娅', to: '主控', note: '同事' }] });
   applyTurnFactsToMemory(memory, {
     relations: [
-      { name: '艾莉娅', note: '恋人' },
-      { name: '王总', note: '上司' }
+      { from: '艾莉娅', to: '主控', note: '恋人' },
+      { from: '王总', to: '主控', note: '上司' },
+      { from: '艾莉娅', to: '王总', note: '前同事' }
     ]
   });
   assert.deepEqual(memory.facts.relations, [
-    { name: '艾莉娅', note: '恋人' },
-    { name: '王总', note: '上司' }
+    { from: '艾莉娅', to: '主控', note: '恋人' },
+    { from: '王总', to: '主控', note: '上司' },
+    { from: '艾莉娅', to: '王总', note: '前同事' }
   ]);
 });
 
-test('applyTurnFacts: relations 未被提及的旧人物排队尾保留（防误删静水关系）', () => {
+test('applyTurnFacts: relations 未被提及的旧边排队尾保留（防误删静水关系）', () => {
   const memory = { facts: emptyFacts() };
-  applyTurnFactsToMemory(memory, { relations: [{ name: '旧友', note: '发小' }] });
-  applyTurnFactsToMemory(memory, { relations: [{ name: '艾莉娅', note: '同事' }] });
+  applyTurnFactsToMemory(memory, { relations: [{ from: '旧友', to: '主控', note: '发小' }] });
+  applyTurnFactsToMemory(memory, { relations: [{ from: '艾莉娅', to: '主控', note: '同事' }] });
   assert.deepEqual(memory.facts.relations, [
-    { name: '旧友', note: '发小' },
-    { name: '艾莉娅', note: '同事' }
+    { from: '旧友', to: '主控', note: '发小' },
+    { from: '艾莉娅', to: '主控', note: '同事' }
   ]);
 });
 
@@ -195,7 +197,7 @@ test('formatFactsMemo: 已完成的约定不注入', () => {
 test('formatFactsMemo: 分区齐全且含硬性知情约束；worldEvents 已废弃不注入', () => {
   const memo = formatFactsMemo({
     promises: [{ text: '周五去看展', status: 'open' }],
-    relations: [{ name: '艾莉娅', note: '同事' }],
+    relations: [{ from: '艾莉娅', to: '主控', note: '同事' }],
     worldEvents: [{ text: '裁员评审→发酵' }],
     intel: [
       { text: '主控已婚', knownBy: ['主控'] },
@@ -205,7 +207,7 @@ test('formatFactsMemo: 分区齐全且含硬性知情约束；worldEvents 已废
   });
   assert.ok(memo.startsWith('【事实备忘】'));
   assert.ok(memo.includes('1. 周五去看展'));
-  assert.ok(memo.includes('· 艾莉娅：同事'));
+  assert.ok(memo.includes('· 艾莉娅 → 主控：同事'));
   // worldEvents 已废弃（与状态栏事件追踪重复）：即使旧数据仍存，也不再注入
   assert.ok(!memo.includes('裁员评审'));
   assert.ok(memo.includes('知情约束【硬性】'));
@@ -253,7 +255,7 @@ test('parseTurnSummary: 结构化字段组装为带标签的多行摘要', () =>
     changes: '两人约定周三再见面。',
     mood: '艾莉娅由焦虑转为放松',
     promises: [{ text: '周三下午三点星巴克改简历', status: 'open' }],
-    relations: [{ name: '艾莉娅', note: '对主控信任加深' }],
+    relations: [{ from: '艾莉娅', to: '主控', note: '对主控信任加深' }],
     worldEvents: [],
     intel: []
   });
@@ -265,7 +267,7 @@ test('parseTurnSummary: 结构化字段组装为带标签的多行摘要', () =>
   assert.ok(r.content.includes('变化：两人约定周三再见面。'));
   assert.ok(r.content.includes('情绪：艾莉娅由焦虑转为放松'));
   assert.equal(r.promises[0].text, '周三下午三点星巴克改简历');
-  assert.equal(r.relations[0].name, '艾莉娅');
+  assert.equal(r.relations[0].from, '艾莉娅');
 });
 
 test('parseTurnSummary: 空字段省略，不留下空标签行', () => {

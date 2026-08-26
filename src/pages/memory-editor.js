@@ -226,10 +226,12 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       const relationRows = (factsEdit.relations || []).map((r, index) => `
         <div class="memory-card" style="display:flex; flex-direction:column; gap:6px;">
           <div style="display:flex; gap:8px; align-items:center;">
-            <input type="text" class="form-input fact-rel-name" data-index="${index}" value="${escapeHtml(r.name)}" placeholder="人名" style="width:120px;">
+            <input type="text" class="form-input fact-rel-from" data-index="${index}" value="${escapeHtml(r.from || '')}" placeholder="A（全名）" style="width:110px;">
+            <span style="flex-shrink:0;">→</span>
+            <input type="text" class="form-input fact-rel-to" data-index="${index}" value="${escapeHtml(r.to || '')}" placeholder="B（全名或主控）" style="width:110px;">
             <button class="btn btn-danger btn-small btn-del-rel" data-index="${index}">删除</button>
           </div>
-          <input type="text" class="form-input fact-rel-note" data-index="${index}" value="${escapeHtml(r.note || '')}" placeholder="身份关系+状态词（如：同班同学，暧昧）">
+          <input type="text" class="form-input fact-rel-note" data-index="${index}" value="${escapeHtml(r.note || '')}" placeholder="A 是 B 的…（身份关系+状态词，如：上司，手持裁员名单）">
         </div>
       `).join('');
       const intelRows = (factsEdit.intel || []).map((item, index) => `
@@ -286,10 +288,16 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         renderContent();
       });
 
-      contentEl.querySelectorAll('.fact-rel-name').forEach((input) => {
+      contentEl.querySelectorAll('.fact-rel-from').forEach((input) => {
         input.addEventListener('change', () => {
           const i = parseInt(input.dataset.index, 10);
-          if (factsEdit.relations[i]) factsEdit.relations[i].name = input.value.trim();
+          if (factsEdit.relations[i]) factsEdit.relations[i].from = input.value.trim();
+        });
+      });
+      contentEl.querySelectorAll('.fact-rel-to').forEach((input) => {
+        input.addEventListener('change', () => {
+          const i = parseInt(input.dataset.index, 10);
+          if (factsEdit.relations[i]) factsEdit.relations[i].to = input.value.trim();
         });
       });
       contentEl.querySelectorAll('.fact-rel-note').forEach((input) => {
@@ -305,7 +313,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         });
       });
       contentEl.querySelector('#btn-add-rel')?.addEventListener('click', () => {
-        factsEdit.relations.push({ name: '', note: '' });
+        factsEdit.relations.push({ from: '', to: '主控', note: '' });
         renderContent();
       });
 
@@ -678,9 +686,13 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         const i = parseInt(sel.dataset.index, 10);
         if (factsEdit.promises[i]) factsEdit.promises[i].status = sel.value === 'done' ? 'done' : 'open';
       });
-      contentEl.querySelectorAll('.fact-rel-name').forEach((input) => {
+      contentEl.querySelectorAll('.fact-rel-from').forEach((input) => {
         const i = parseInt(input.dataset.index, 10);
-        if (factsEdit.relations[i]) factsEdit.relations[i].name = input.value.trim();
+        if (factsEdit.relations[i]) factsEdit.relations[i].from = input.value.trim();
+      });
+      contentEl.querySelectorAll('.fact-rel-to').forEach((input) => {
+        const i = parseInt(input.dataset.index, 10);
+        if (factsEdit.relations[i]) factsEdit.relations[i].to = input.value.trim();
       });
       contentEl.querySelectorAll('.fact-rel-note').forEach((input) => {
         const i = parseInt(input.dataset.index, 10);
@@ -711,7 +723,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       // worldEvents 已废弃（与状态栏事件追踪重复）：不再保存，旧数据在此处自然清除
       chat.memory.facts = normalizeFacts({
         promises: (factsEdit.promises || []).filter((p) => p && String(p.text || '').trim()),
-        relations: (factsEdit.relations || []).filter((r) => r && String(r.name || '').trim()),
+        relations: (factsEdit.relations || []).filter((r) => r && String(r.from || r.name || '').trim()),
         intel: (factsEdit.intel || [])
           .filter((i) => i && String(i.text || '').trim())
           .map((i) => ({

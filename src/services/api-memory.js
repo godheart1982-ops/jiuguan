@@ -100,15 +100,7 @@ export function normalizeFacts(raw) {
       .filter((p) => p.text)
       .slice(0, FACTS_PROMISE_LIMIT)
     : [];
-  const relations = Array.isArray(f.relations)
-    ? f.relations
-      .map((r) => ({
-        name: String((r && r.name) || '').trim(),
-        note: String((r && r.note) || '').trim()
-      }))
-      .filter((r) => r.name)
-      .slice(0, FACTS_RELATION_LIMIT)
-    : [];
+  const relations = normalizeRelationList(f.relations).slice(0, FACTS_RELATION_LIMIT);
   const worldEvents = Array.isArray(f.worldEvents)
     ? f.worldEvents
       .map((w) => ({
@@ -134,17 +126,26 @@ function normalizePromiseList(arr) {
     .filter((p) => p.text);
 }
 
+// 关系条目统一为边形态 {from, to, note}（"from → to：note"，读作「from 是 to 的 note」）；
+// 旧星形 {name, note} 机械升级为 name → 主控（旧数据读取时自动迁移）
 function normalizeRelationList(arr) {
   if (!Array.isArray(arr)) return [];
   return arr
     .map((r) => {
-      if (typeof r === 'string') return { name: r.trim(), note: '' };
+      if (typeof r === 'string') return { from: r.trim(), to: '主控', note: '' };
+      const name = String((r && r.name) || '').trim();
       return {
-        name: String((r && r.name) || '').trim(),
+        from: String((r && r.from) || '').trim() || name,
+        to: String((r && r.to) || '').trim() || '主控',
         note: String((r && r.note) || '').trim()
       };
     })
-    .filter((r) => r.name);
+    .filter((r) => r.from);
+}
+
+/** 边的全量重写匹配键：from+to 双键（端点全名纪律由提示词保证） */
+function relationEdgeKey(r) {
+  return (String(r.from || '') + '→' + String(r.to || '')).toLowerCase();
 }
 
 /** 从 content 里拆 ｜世界： 标记 */
@@ -215,13 +216,13 @@ export function applyTurnFactsToMemory(memory, turn) {
     facts.promises = [...aiOpen, ...doneMerged.slice(-FACTS_PROMISE_DONE_KEEP)];
   }
 
-  // 关系【全量重写】：AI 拿着旧清单核对后输出完整新清单，整体替换（对齐名字变体、刷新过期 note）；
-  // AI 没提到的旧人物排到队尾保留（防误删静水关系），随条数上限自然淘汰；
+  // 关系【全量重写】：AI 拿着旧图谱核对后输出完整新清单（按 from+to 双键对齐、刷新过期 note）；
+  // AI 没提到的旧边排到队尾保留（防误删静水关系），随条数上限自然淘汰；
   // 未提供 relations 字段时（如旧数据回填）不动现有关系
   if (turn && Array.isArray(turn.relations)) {
     const aiRelations = normalizeRelationList(turn.relations);
-    const aiNames = new Set(aiRelations.map((r) => r.name.toLowerCase()));
-    const rescued = facts.relations.filter((r) => !aiNames.has(r.name.toLowerCase()));
+    const aiKeys = new Set(aiRelations.map(relationEdgeKey));
+    const rescued = facts.relations.filter((r) => !aiKeys.has(relationEdgeKey(r)));
     facts.relations = [...rescued, ...aiRelations].slice(-FACTS_RELATION_LIMIT);
   }
 
@@ -263,9 +264,9 @@ export function formatFactsMemo(factsRaw) {
   }
   if (facts.relations.length) {
     if (lines.length) lines.push('');
-    lines.push('人物关系：');
+    lines.push('人物关系（"A → B：关系"读作「A 是 B 的…」）：');
     facts.relations.forEach((r) => {
-      lines.push(`· ${r.name}${r.note ? '：' + r.note : ''}`);
+      lines.push(`· ${r.from} → ${r.to}${r.note ? '：' + r.note : ''}`);
     });
   }
   if (facts.intel.length) {
@@ -408,7 +409,7 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, co
   //（对齐名字变体、刷新过期 note、对齐情报文本与 knownBy，杜绝同一人/同一秘密多份矛盾条目）
   const relList = Array.isArray(context.currentRelations) ? context.currentRelations.filter(r => r && r.name) : [];
   const relNote = relList.length
-    ? `\n当前人物关系清单（relations 字段需逐条核对）：\n${relList.map((r, i) => `${i + 1}. ${r.name}${r.note ? '：' + r.note : ''}`).join('\n')}\n`
+    ? `\n当前人物关系图谱（relations 字段需逐条核对）：\n${relList.map((r, i) => `${i + 1}. ${r.from} → ${r.to}${r.note ? '：' + r.note : ''}`).join('\n')}\n`
     : '';
   const intelList = Array.isArray(context.currentIntel) ? context.currentIntel.filter(i => i && i.text) : [];
   const intelNote = intelList.length
@@ -429,7 +430,7 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, co
   "changes":"本轮新产生的计划/状态/立场变化，没有则留空",
   "mood":"主要人物的情绪或态度转折，没有则留空",
   "promises":[{"text":"未完成或新产生的具体约定/承诺","status":"open或done"}],
-  "relations":[{"name":"人物名","note":"身份关系+可选状态词（如「同班同学，暧昧」），≤15字"}],
+  "relations":[{"from":"人物全名","to":"人物全名或「主控」","note":"身份关系+可选状态词，≤15字"}],
   "intel":[{"text":"一条情报/秘密的简短陈述","knownBy":["可知此人的名字","主控"]}]
 }
 3. date 必须使用：${date}
@@ -443,8 +444,9 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, co
    记录门槛【三道闸，缺一不可】：①跨轮才兑现——当轮或下一轮就能随手完成的事不记；②有明确时点或触发条件——「周五来接我」记，「改天约/下次再说」不记；③不兑现会产生后果——忘了它剧情会矛盾或角色会生气的才记，纯社交寒暄、客套、无后续影响的口头约定一律不记。
    照抄例外：不符合三道闸的旧约定直接标 done 移出 open 清单（视为自然淘汰）。
    诚意标记【必须辨别】：明显敷衍/欺骗/安抚式的承诺仍然记录（它是"对方信了的债"，拆穿时是戏），但文本前加标记：【敷衍】=说说而已没打算兑现（如「【敷衍】周五陪她看电影」）；【谎言】=刻意欺骗对方（如「【谎言】保证没有别人」）。标记后可注明谁骗谁（如「（她信了，他没打算去）」）；拿不准是否真诚时按真诚记录，禁止乱标。
-7. relations【强制检查·全量重写】：输出本轮之后的**完整人物关系清单**——从上方「当前人物关系清单」逐条核对：没变的人物**原样照抄**（name 与 note 都不许改）；关系有实质变化的就地更新 note；新出现的重要人物追加。清单为空且本轮无新人物时输出 []。不要编造。
-   note 格式【硬性】：只写身份关系+可选的简短状态词（如「同班同学，暧昧」「上下级，她手持裁员名单」「前妻，疏离」），≤15字；【禁止】态度描写（如"表面冷淡实则关心"）、动机/心理解释（如"因为愧疚"）、行为预测（如"会暗中帮他"）——人物性格与态度由角色卡与剧情呈现，不记入备忘。
+7. relations【强制检查·全量重写】：输出本轮之后的**完整人物关系图谱**——关系以边表示："from → to：note"，读作「from 是 to 的 note」；一段关系默认只写一行（关系天然是双向的，如「上司」自然蕴含对方是下属），仅当两边视角/认知真正不同时才追加反向行（示范：「林晚 → 苏晴：母亲（自知，瞒着苏晴）」+「苏晴 → 林晚：阿姨（误认，不知是生母）」）。反向认知行的 note 必须带认知标记（误认/不知情/以为），无标记的反向行不合法——否则一真一假两条边无法分辨哪个是事实。认知不对称的秘密本体应同时记入 intel（带 knownBy）。从上方「当前人物关系图谱」逐条核对：没变的边**原样照抄**（from/to/note 都不许改）；关系有实质变化的就地更新 note；新出现的重要关系追加。清单为空且本轮无新关系时输出 []。不要编造。
+   端点规则【硬性】：端点一律使用该人物最近出现过的**全名**，禁止昵称/爱称/缩写当端点（图谱只用正式名，昵称留在正文）；涉及主控的边，主控端固定写「主控」。
+   note 格式【硬性】：只写身份关系+可选的简短状态词（如「上司，手持裁员名单」「同班同学，暧昧」），≤15字；【禁止】态度描写（如"表面冷淡实则关心"）、动机/心理解释（如"因为愧疚"）、行为预测（如"会暗中帮他"）——人物性格与态度由角色卡与剧情呈现，不记入备忘。
    照抄例外：旧 note 若含态度/动机/行为描写或超过15字，就地精简为上述格式（保留身份关系与核心状态词）。
 8. intel【强制检查·全量重写】：输出本轮之后的**完整知情情报清单**——从上方「当前知情情报清单」逐条核对：没变的情报**原样照抄**（text 与 knownBy 都不许改）；知情范围有变化的，text 照抄并给出**当前**全量 knownBy（刚得知的人必须加入，仍应保密的人不得加入）；新出现的情报追加。knownBy 用角色名，全员公开可用「公开」。清单为空且本轮无新情报时输出 []。不要编造。
    记录门槛【三道闸，缺一不可】：①秘密性——有人刻意隐瞒或知情范围明显受限；双方共同经历的普通事件不记（在场者自然知道，无需追踪）；②会制约演绎——「某人不知道这件事」必须会影响他后续的言行（出轨的痕迹、未公开的裁员名单、瞒着主控的检查结果）；③有泄露路径——存在被不该知道的人撞破或透露的可能。公开信息、共同经历、无保密价值的日常一律不记。
