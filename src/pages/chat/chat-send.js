@@ -126,6 +126,8 @@ export function createSendController(deps) {
     const chat = getChat();
     const userMsg = chat.messages[userIndex];
     if (!userMsg || userMsg.role !== 'user') return;
+    // 元指令轮（$开头）：跳过全部剧情向后处理（补全/种子/插图/记忆总结/调取落盘）
+    const isMeta = userMsg.meta === true;
 
     isGenerating = true;
     sendBtn.classList.add('hidden');
@@ -151,14 +153,15 @@ export function createSendController(deps) {
         userMsg.content,
         chat.memory,
         chat.seedArchive,
-        { webSearchRef: options.webSearchRef || '' }
+        { webSearchRef: options.webSearchRef || '', metaCommand: isMeta }
       );
 
       const assistantMsg = {
         role: 'assistant',
         content: 'AI 正在输入…',
         timestamp: new Date().toISOString(),
-        round: userMsg.round
+        round: userMsg.round,
+        ...(isMeta ? { meta: true } : {})
       };
       chat.messages.push(assistantMsg);
       const appendResult = appendMessage(messagesContainer, assistantMsg, avatarUrl, chat, handleRefresh, renderMessages);
@@ -235,10 +238,10 @@ export function createSendController(deps) {
                 contentEl.innerHTML = renderMarkdown(assistantMsg.content);
               }
 
-              // 检查是否漏掉了输出格式最后一个模块，若开启自动补全则自动补全
+              // 检查是否漏掉了输出格式最后一个模块，若开启自动补全则自动补全（元指令轮无格式，跳过）
               const config = await getConfig();
               const lastHeading = getLastOutputHeading(character.outputFormat);
-              if (config.behavior?.autoCompleteLastModule && lastHeading && !assistantMsg.content.includes('>### ' + lastHeading)) {
+              if (!isMeta && config.behavior?.autoCompleteLastModule && lastHeading && !assistantMsg.content.includes('>### ' + lastHeading)) {
                 try {
                   await updateGenerationForeground({ title: 'AI 回复不完整', text: '正在补全缺失模块…' });
                   // 补全走副 API（机械补写任务，稳定便宜）
@@ -270,8 +273,8 @@ export function createSendController(deps) {
               }
 
               // 远期记忆调取：AI 末尾标记的「记忆调取：#N」落盘，下一轮 buildMessages 一次性注入该条全文；
-              // 本轮若无新请求则清除已消费的 pendingRecalls（一次性注入，不常驻）
-              if (chat.memory && Array.isArray(chat.memory.longTerm)) {
+              // 本轮若无新请求则清除已消费的 pendingRecalls（一次性注入，不常驻）。元指令轮不解析
+              if (!isMeta && chat.memory && Array.isArray(chat.memory.longTerm)) {
                 const recalls = extractMemoryRecalls(assistantMsg.content)
                   .filter(n => n >= 1 && n <= chat.memory.longTerm.length)
                   .slice(0, RECALL_PER_TURN_LIMIT);
@@ -285,10 +288,10 @@ export function createSendController(deps) {
                 }
               }
 
-              // 插图种子归档：扫描本轮回复中的插图 URL，自动维护种子档案（本地正则，不调 AI）
+              // 插图种子归档：扫描本轮回复中的插图 URL，自动维护种子档案（本地正则，不调 AI；元指令轮跳过）
               // 插图种子归档：只登记新角色（基准锁定），已有角色的 seed 永不覆盖——
               // AI 按规则从档案基准做 1-20 偏移让构图随剧情变，档案本身保持基准不漂移
-              const foundSeeds = extractImageSeeds(assistantMsg.content);
+              const foundSeeds = isMeta ? [] : extractImageSeeds(assistantMsg.content);
               if (foundSeeds.length > 0) {
                 if (!chat.seedArchive) chat.seedArchive = {};
                 let archiveChanged = false;
@@ -300,9 +303,9 @@ export function createSendController(deps) {
                 if (archiveChanged) await saveChat(chat).catch(() => {});
               }
 
-              // 免费生图记忆：pollinations URL 机械拼入英文外貌锚点（锁脸）。
+              // 免费生图记忆：pollinations URL 机械拼入英文外貌锚点（锁脸）。元指令轮跳过
               // 快路径为纯字符串处理；仅某角色首次出图时需一次副 API 提取（几秒，一次性）
-              if (await ensurePollinationsAnchors(assistantMsg, chat, character).catch(() => false)) {
+              if (!isMeta && await ensurePollinationsAnchors(assistantMsg, chat, character).catch(() => false)) {
                 await saveChat(chat).catch(() => {});
                 if (contentEl && contentEl.isConnected) {
                   contentEl.innerHTML = renderMarkdown(assistantMsg.content);
@@ -313,7 +316,8 @@ export function createSendController(deps) {
               // 先把插图位置原地换成生成进度占位——此时标记渲染为"点击生成"按钮，不替换会误导用户、还可能被重复点击
               // manual 手动模式不自动生成：保留"点击生成"按钮，由用户点击后走手动面板
               const cfgForAuto = await getConfig().catch(() => ({}));
-              const isManualMode = ((cfgForAuto.image && cfgForAuto.image.provider) || '') === 'manual';
+              // 元指令轮视同 manual：不自动生成插图、不入插图队列
+              const isManualMode = isMeta || ((cfgForAuto.image && cfgForAuto.image.provider) || '') === 'manual';
               if (contentEl && !isManualMode) {
                 const autoGenBtn = contentEl.querySelector('.img-seedream-gen');
                 if (autoGenBtn) showSeedreamLoading(autoGenBtn);
@@ -346,8 +350,8 @@ export function createSendController(deps) {
               }
 
               // 生成短期记忆：入后台串行队列，不再 await——发送按钮随 resolve 立即恢复，
-              // 总结在后台按 catch-up 顺序补全所有未总结的窗口外轮次（直到 index U-1-3）
-              const shouldSummarize = character.memoryEnabled !== false;
+              // 总结在后台按 catch-up 顺序补全所有未总结的窗口外轮次（直到 index U-1-3）。元指令轮不总结
+              const shouldSummarize = character.memoryEnabled !== false && !isMeta;
               if (shouldSummarize) {
                 const memoryChatId = chat.id;
                 enqueueMemoryTask(async () => {
@@ -378,7 +382,8 @@ export function createSendController(deps) {
                   currentRelations: (((chat.memory.facts || {}).relations) || []),
                   currentIntel: (((chat.memory.facts || {}).intel) || [])
                 });
-                const allRounds = getAllRounds(chat.messages);
+                // meta 指令轮不参与总结：过滤后再做窗口/补总结计算，保证轮次与窗口都是纯剧情轮
+                const allRounds = getAllRounds(chat.messages).filter(r => !r.user.meta);
                 const U = allRounds.length;
                 const normalTargetIdx = U - 1 - RAW_WINDOW_TURNS;
                 if (normalTargetIdx >= 0) {

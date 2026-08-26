@@ -25,6 +25,8 @@ export const THINKING_PREFILL = '<思考>';
 export async function buildMessages(character, historyMessages, userMessage, memory, seedArchive, options = {}) {
   const messages = [];
   const webSearchRef = (options && options.webSearchRef) ? String(options.webSearchRef).trim() : '';
+  // 元指令模式：用户输入以 $ 开头——跳过格式/思维链/插图等全部剧情向注入，只留设定与记忆供答题
+  const metaCommand = options && options.metaCommand === true;
 
   // 全局配置（思考链输出开关 / 思维链预填充等）
   const config = await getConfig();
@@ -54,17 +56,17 @@ export async function buildMessages(character, historyMessages, userMessage, mem
     systemContent += '\n\n' + worldBookBlock;
   }
 
-  if (character.enableRandomNarrative !== false) {
+  if (character.enableRandomNarrative !== false && !metaCommand) {
     systemContent += '\n\n【叙事规则：事件系统】\n' + EVENT_SYSTEM_RULE;
     systemContent += '\n\n【叙事规则：随机 NPC 生成】\n' + RANDOM_NPC_RULE;
   }
 
   // 思考链输出：全局开关打开且本卡填了思考格式时，作为独立段落放在输出格式之前
-  if (thinkingOn && character.thinkingFormat) {
+  if (thinkingOn && character.thinkingFormat && !metaCommand) {
     systemContent += '\n\n【思考过程】\n回复正文之前，你必须先按以下要求输出思考过程：\n\n' + character.thinkingFormat;
   }
 
-  if (character.outputFormat) {
+  if (character.outputFormat && !metaCommand) {
     systemContent += '\n\n【输出格式要求】\n你必须严格按照以下 Markdown 格式回复：\n\n' + character.outputFormat;
 
     // 自动提取输出格式里的 >### 标题，生成模块顺序清单
@@ -95,7 +97,7 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   // 插图功能（App 级开关）：规则文本是静态的，放在记忆区之前可进缓存
   const imageEnabled = config.ui && config.ui.imageEnabled === true;
   const imageProvider = (config.image && config.image.provider) || 'pollinations';
-  if (imageEnabled && isPaidImageProvider(imageProvider)) {
+  if (!metaCommand && imageEnabled && isPaidImageProvider(imageProvider)) {
     // 付费模式（Seedream / Grok / Gemini）：AI 只输出空标记，画面描述由副 API 根据回复内容总结生成
     systemContent += '\n\n【插图功能】当且仅当本轮场景中存在女性角色时，才在最末尾（所有模块之后）输出插图模块；没有女性角色时完全不输出插图模块。每轮最多一张。格式（严格照抄，括号内不写任何内容）：\n' +
       '>### 🖼️插图\n![角色名](seedream://)\n' +
@@ -103,7 +105,7 @@ export async function buildMessages(character, historyMessages, userMessage, mem
       'alt 文本规则【强制】：只写该女性角色名，禁止写场景描述或"主控"。\n' +
       '禁止在括号内填写任何描述或链接，画面描述由 App 根据你的回复正文自动生成（只画该角色单人，主控不入画）。\n' +
       '【绝对禁止】禁止输出 local-img:// 或任何本地文件路径、http 图片链接；你能输出的插图格式只有上面这一种空标记。';
-  } else if (imageEnabled) {
+  } else if (!metaCommand && imageEnabled) {
     // 免费模式（pollinations）：AI 直接拼在线生图 URL
     // NSFW 开关（插图设置）：开=提示词允许成人描写、去掉 SFW 后缀；关=维持全年龄向机械约束
     const pollinationsNsfw = config.image && config.image.pollinationsNsfw === true;
@@ -179,14 +181,14 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   }
 
   // 记忆修正通道：允许主模型上报记忆矛盾（开关在「其他设置 → 生成行为」，误报多可关）
-  if (memoryOn && config.behavior && config.behavior.memoryCorrection !== false) {
+  if (!metaCommand && memoryOn && config.behavior && config.behavior.memoryCorrection !== false) {
     systemContent += '\n\n【记忆修正通道】如果你发现【长期记忆】或【事实备忘】与当前剧情现状存在明确矛盾，在本轮回复最末尾（所有模块之后）另起一行输出「记忆修正：一句话说明实际情况」。仅在确有矛盾时输出；拿不准或没有矛盾时绝对禁止输出该行；禁止写进正文叙述；不要每轮都输出。';
   }
 
   // 插图种子档案：随生图不断更新，放在记忆区之后（动态区，不进缓存）
   // 仅 pollinations 模式使用；seedream/gemini 无 seed 参数，不需要档案
   // 记录形态为 {seed, anchor}（免费生图记忆）；注入只给 AI 看 seed，英文锚点由 App 机械拼 URL 用
-  if (imageEnabled && imageProvider === 'pollinations' && seedArchive && typeof seedArchive === 'object') {
+  if (!metaCommand && imageEnabled && imageProvider === 'pollinations' && seedArchive && typeof seedArchive === 'object') {
     const entries = Object.entries(seedArchive);
     if (entries.length > 0) {
       systemContent += '\n\n【插图种子档案】' + entries.map(([name, rec]) => {
@@ -194,6 +196,11 @@ export async function buildMessages(character, historyMessages, userMessage, mem
         return `${name}=${seed}`;
       }).join('；');
     }
+  }
+
+  // 元指令模式说明：替代全部剧情向注入（格式/思维链/插图等已在上方跳过），剧情状态本轮冻结
+  if (metaCommand) {
+    systemContent += '\n\n【元指令模式】本轮用户输入以 $ 开头，是系统指令而非剧情内容：不推进剧情与时间、不输出任何格式模块（状态栏/世界信息/行动选项/插图等一律不输出）、不写思维链。基于角色卡、世界书、记忆与事实备忘，直接、如实地回答指令本身；若指令要求修改设定或剧情走向，明确确认你将如何执行。';
   }
 
   messages.push({
@@ -210,10 +217,16 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   const recentHistory = sliceRecentTurns(historyMessages, rawWindow);
 
   for (const msg of recentHistory) {
-    messages.push({
-      role: msg.role,
-      content: sanitizeHistoryIllustrationMarkers(msg.content)
-    });
+    // meta 指令轮留在历史里（改剧情类指令才能持续生效），但带元标记，防止 AI 当成剧情对话
+    const content = sanitizeHistoryIllustrationMarkers(msg.content);
+    if (msg.meta === true) {
+      messages.push({
+        role: msg.role,
+        content: (msg.role === 'user' ? '【系统指令】（非剧情输入，未推进剧情）\n' : '【指令答复】\n') + content
+      });
+    } else {
+      messages.push({ role: msg.role, content });
+    }
   }
 
   // 当前用户输入；联网参考仅挂在本轮 user 前（不写历史、不进记忆）
@@ -245,7 +258,8 @@ function sliceRecentTurns(history, maxTurns) {
   let userCount = 0;
   let start = 0;
   for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === 'user') {
+    // meta 指令轮（$开头）不占窗口坑位，只数剧情轮
+    if (history[i].role === 'user' && history[i].meta !== true) {
       userCount++;
       if (userCount === maxTurns) {
         start = i;

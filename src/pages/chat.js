@@ -356,16 +356,24 @@ export async function renderChat(container, characterId, chatId) {
       text = ((cfg.behavior && cfg.behavior.autoAdvancePrompt) || '').trim() || DEFAULT_AUTO_ADVANCE_PROMPT;
     }
 
+    // $ 开头 = 元指令（系统指令，非剧情输入）：不推进剧情、不占轮次、不进记忆总结
+    const isMeta = /^[\$＄]/.test(text);
+    if (isMeta && !/^[\$＄]\s*\S/.test(text)) {
+      showMemoryStatus('$ 后需要跟指令内容，例如：$总结现在所有人的关系', 'info');
+      return;
+    }
+
     // 取走本轮联网参考（只注入 API，不写入用户气泡/历史）
     const webSearchRef = mountedSearch ? mountedSearch.brief : '';
     clearMountedSearch();
 
-    // 添加用户消息
+    // 添加用户消息（meta 轮不分配轮次号，剧情轮编号保持连续）
     const userMsg = {
       role: 'user',
       content: text,
       timestamp: new Date().toISOString(),
-      round: (currentChat.roundCounter = (Number.isFinite(currentChat.roundCounter) ? currentChat.roundCounter : 0) + 1)
+      round: isMeta ? null : (currentChat.roundCounter = (Number.isFinite(currentChat.roundCounter) ? currentChat.roundCounter : 0) + 1),
+      ...(isMeta ? { meta: true } : {})
     };
     currentChat.messages.push(userMsg);
     appendMessage(messagesContainer, userMsg, null, currentChat, handleRefresh, renderMessages, handleEditResend);
