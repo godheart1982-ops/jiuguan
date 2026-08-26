@@ -365,6 +365,7 @@ function composeStructuredSummary(parsed) {
  * @param {string} [context.mainControlName] 主控名
  * @param {Array<{date: string, content: string}>} [context.previousSummaries] 最近的短期摘要（前情锚点）
  * @param {string[]} [context.corrections] 主模型上报的记忆修正（extractMemoryCorrections 提取）
+ * @param {string} [context.supplement] 对话补充设定（用户手动维护，仅作理解背景）
  * @param {Array<{text: string, status: string}>} [context.openPromises] 当前未完成约定清单（全量重写核对用）
  * @param {Array<{name: string, note: string}>} [context.currentRelations] 当前人物关系清单（全量重写核对用）
  * @param {Array<{text: string, knownBy: string[]}>} [context.currentIntel] 当前知情情报清单（全量重写核对用）
@@ -390,6 +391,11 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, co
     : [];
   const prevNote = prev.length
     ? `\n此前剧情摘要（仅供理解指代与背景，【不要】重复总结这些内容）：\n${prev.map(s => `${s.date || ''}：${s.content}`).join('\n')}\n`
+    : '';
+
+  // 对话补充设定：用户手动维护的单档补丁，作为理解背景（retcon 防摘要按旧设定写），不要总结它本身
+  const supplementNote = (context.supplement || '').trim()
+    ? `\n对话补充设定（用户手动维护，仅作理解背景，【不要】总结其内容本身）：\n${context.supplement.trim()}\n`
     : '';
 
   // 记忆修正上报：主模型在回复末尾标记的记忆矛盾，按最高优先级并入事实清单
@@ -452,7 +458,7 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, co
 8. intel【强制检查·全量重写】：输出本轮之后的**完整知情情报清单**——从上方「当前知情情报清单」逐条核对：没变的情报**原样照抄**（text 与 knownBy 都不许改）；知情范围有变化的，text 照抄并给出**当前**全量 knownBy（刚得知的人必须加入，仍应保密的人不得加入）；新出现的情报追加。knownBy 用角色名，全员公开可用「公开」。清单为空且本轮无新情报时输出 []。不要编造。
    记录门槛【三道闸，缺一不可】：①秘密性——有人刻意隐瞒或知情范围明显受限；双方共同经历的普通事件不记（在场者自然知道，无需追踪）；②会制约演绎——「某人不知道这件事」必须会影响他后续的言行（出轨的痕迹、未公开的裁员名单、瞒着主控的检查结果）；③有泄露路径——存在被不该知道的人撞破或透露的可能。公开信息、共同经历、无保密价值的日常一律不记。
    照抄例外：不符合三道闸的旧情报直接移除（视为自然淘汰）。
-${contextNote}${prevNote}${correctionNote}${openNote}${relNote}${intelNote}
+${contextNote}${prevNote}${supplementNote}${correctionNote}${openNote}${relNote}${intelNote}
 当轮对话：
 用户：${sanitizeHistoryIllustrationMarkers(userContent)}
 

@@ -47,7 +47,9 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   );
   // 生图外貌身材锚点档案（本地副本，保存时写回 chat.appearanceAnchors）
   let appearanceAnchorsEdit = { ...(chat.appearanceAnchors || {}) };
-  // 当前激活的记忆页签：'short' 短期 / 'long' 长期 / 'facts' 事实备忘 / 'seeds' 插图种子 / 'anchors' 外貌身材锚点
+  // 对话补充设定（本地副本，保存时写回 chat.memory.supplement；常驻注入 system，仅本对话生效）
+  let supplementEdit = String((chat.memory && chat.memory.supplement) || '');
+  // 当前激活的记忆页签：'short' 短期 / 'long' 长期 / 'facts' 事实备忘 / 'seeds' 插图种子 / 'anchors' 外貌身材锚点 / 'supplement' 补充设定
   let activeTab = 'short';
 
   const overlay = document.createElement('div');
@@ -80,6 +82,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
           <div class="memory-tabs-row">
             <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-seeds" data-tab="seeds">免费生图记忆</button>
             <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-anchors" data-tab="anchors">外貌锚点</button>
+            <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-supplement" data-tab="supplement">补充设定</button>
           </div>
         </div>
         <div class="memory-tab-content" id="memory-content">
@@ -140,7 +143,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   }
 
   function updateCounter() {
-    const text = JSON.stringify({ shortTerm: shortTermMemories, longTerm: longTermMemories, facts: factsEdit });
+    const text = JSON.stringify({ shortTerm: shortTermMemories, longTerm: longTermMemories, facts: factsEdit, supplement: supplementEdit });
     const tokens = countTokens(text);
     counterEl.textContent = `${tokens} tokens`;
   }
@@ -197,17 +200,41 @@ export async function openMemoryEditor(chat, character, onUpdate) {
     const factsTabBtn = document.getElementById('tab-facts');
     const seedsTabBtn = document.getElementById('tab-seeds');
     const anchorsTabBtn = document.getElementById('tab-anchors');
-    if (shortTabBtn && longTabBtn && factsTabBtn && seedsTabBtn && anchorsTabBtn) {
+    const supplementTabBtn = document.getElementById('tab-supplement');
+    if (shortTabBtn && longTabBtn && factsTabBtn && seedsTabBtn && anchorsTabBtn && supplementTabBtn) {
       shortTabBtn.textContent = `短期（${shortTerm.length}）`;
       longTabBtn.textContent = `长期（${longTerm.length}）`;
       factsTabBtn.textContent = `事实（${factsCount()}）`;
       seedsTabBtn.textContent = `免费生图（${Object.keys(seedArchiveEdit).length}）`;
       anchorsTabBtn.textContent = `锚点（${Object.keys(appearanceAnchorsEdit).length}）`;
+      supplementTabBtn.textContent = `补充（${supplementEdit.trim().length}字）`;
       shortTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'short' ? 'btn-primary' : 'btn-ghost');
       longTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'long' ? 'btn-primary' : 'btn-ghost');
       factsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'facts' ? 'btn-primary' : 'btn-ghost');
       seedsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'seeds' ? 'btn-primary' : 'btn-ghost');
       anchorsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'anchors' ? 'btn-primary' : 'btn-ghost');
+      supplementTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'supplement' ? 'btn-primary' : 'btn-ghost');
+    }
+
+    if (activeTab === 'supplement') {
+      // 对话补充设定：单文本区，常驻注入 system（与角色卡冲突以本区为准）；仅本对话生效，不动角色卡
+      contentEl.innerHTML = `
+      <div class="memory-section">
+        <div class="memory-section-title">对话补充设定（${supplementEdit.trim().length} 字）</div>
+        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">仅当前对话生效，不影响角色卡。写临时的想法、对本卡的改动、retcon——常驻注入，每轮随 system 发给 AI；与角色卡冲突时以这里为准。它每轮都占 token，写完留意字数。</div>
+        <textarea class="form-textarea" id="supplement-text" rows="12" style="font-size: 0.9rem; line-height: 1.6;" placeholder="例如：苏晴其实是主控的大学同学，两人都在装不认识；本档节奏放慢，禁止快速进入亲密戏。">${escapeHtml(supplementEdit)}</textarea>
+      </div>
+      `;
+      const textarea = contentEl.querySelector('#supplement-text');
+      textarea.addEventListener('input', () => {
+        supplementEdit = textarea.value;
+        // 轻量刷新页签字数，不整页重渲染（避免输入中丢焦点）
+        const btn = document.getElementById('tab-supplement');
+        if (btn) btn.textContent = `补充（${supplementEdit.trim().length}字）`;
+        updateCounter();
+      });
+      updateCounter();
+      return;
     }
 
     if (activeTab === 'facts') {
@@ -663,6 +690,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   document.getElementById('tab-facts').addEventListener('click', () => { activeTab = 'facts'; renderContent(); });
   document.getElementById('tab-seeds').addEventListener('click', () => { activeTab = 'seeds'; renderContent(); });
   document.getElementById('tab-anchors').addEventListener('click', () => { activeTab = 'anchors'; renderContent(); });
+  document.getElementById('tab-supplement').addEventListener('click', () => { activeTab = 'supplement'; renderContent(); });
 
   function closeEditor() {
     overlay.remove();
@@ -719,6 +747,8 @@ export async function openMemoryEditor(chat, character, onUpdate) {
 
       chat.memory.shortTerm = newShortTerm;
       chat.memory.longTerm = newLongTerm;
+      // 对话补充设定：单文本区，常驻注入 system（仅本对话生效）
+      chat.memory.supplement = supplementEdit.trim();
       // 事实备忘（过滤空行；含知情情报 intel + knownBy）
       // worldEvents 已废弃（与状态栏事件追踪重复）：不再保存，旧数据在此处自然清除
       chat.memory.facts = normalizeFacts({

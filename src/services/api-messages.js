@@ -171,6 +171,13 @@ export async function buildMessages(character, historyMessages, userMessage, mem
     }
   }
 
+  // 对话补充设定：用户手动维护的单档覆盖补丁（记忆编辑器「补充」页签）；
+  // 与角色卡初始设定冲突时以本区为准，仅当前对话生效
+  const supplement = memoryOn && memory ? String(memory.supplement || '').trim() : '';
+  if (supplement) {
+    systemContent += '\n\n【对话补充设定】（用户对本剧情的补充与修正，仅当前对话生效；与角色卡初始设定冲突时以本区为准）\n' + supplement;
+  }
+
   // 记忆修正通道：允许主模型上报记忆矛盾（开关在「其他设置 → 生成行为」，误报多可关）
   if (memoryOn && config.behavior && config.behavior.memoryCorrection !== false) {
     systemContent += '\n\n【记忆修正通道】如果你发现【长期记忆】或【事实备忘】与当前剧情现状存在明确矛盾，在本轮回复最末尾（所有模块之后）另起一行输出「记忆修正：一句话说明实际情况」。仅在确有矛盾时输出；拿不准或没有矛盾时绝对禁止输出该行；禁止写进正文叙述；不要每轮都输出。';

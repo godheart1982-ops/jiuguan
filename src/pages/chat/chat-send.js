@@ -372,6 +372,7 @@ export function createSendController(deps) {
                   characterName: character.name || '',
                   mainControlName: (character.mainControl && character.mainControl.name) || '',
                   previousSummaries: chat.memory.shortTerm.slice(-2),
+                  supplement: (chat.memory && chat.memory.supplement) || '',
                   corrections: extractMemoryCorrections(assistantFullContent || ''),
                   openPromises: (((chat.memory.facts || {}).promises) || []).filter(p => p && p.status !== 'done'),
                   currentRelations: (((chat.memory.facts || {}).relations) || []),
