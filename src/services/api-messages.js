@@ -167,7 +167,7 @@ export async function buildMessages(character, historyMessages, userMessage, mem
 
   // 事实备忘：约定/关系/世界事件结构化硬事实（与散文记忆并列）
   if (memoryOn && memory && memory.facts) {
-    const factsBlock = formatFactsMemo(memory.facts);
+    const factsBlock = formatFactsMemo(memory.facts, (character.mainControl && character.mainControl.name) || '');
     if (factsBlock) {
       systemContent += '\n\n' + factsBlock;
     }

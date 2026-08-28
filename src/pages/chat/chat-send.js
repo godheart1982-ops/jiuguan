@@ -478,7 +478,7 @@ export function createSendController(deps) {
                           relations,
                           worldEvents,
                           intel
-                        });
+                        }, (character.mainControl && character.mainControl.name) || '');
                         summarizedTs.add(target.user.timestamp);
                         anySummarized = true;
                       }
@@ -515,7 +515,7 @@ export function createSendController(deps) {
                             relations,
                             worldEvents,
                             intel
-                          });
+                          }, (character.mainControl && character.mainControl.name) || '');
                         }
                         await saveChat(chat).catch(() => {});
                         showMemoryStatus('短期记忆已生成', 'success');

@@ -400,3 +400,17 @@ test('matchLongTermRecalls: 命中目录区 recallKeys，全文区跳过，无 k
   delete list[0].recallKeys;
   assert.deepEqual(matchLongTermRecalls(list, '专名1号', fullIndices), []);
 });
+
+test('normalizeFacts/applyTurnFacts: 主控端点归一化——「主控」映射为真名，防裂成两个节点', () => {
+  // 无真名时保持「主控」字面（迁移等无名场景）
+  const noName = normalizeFacts({ relations: [{ from: '艾莉娅', to: '主控', note: '同事' }] });
+  assert.equal(noName.relations[0].to, '主控');
+  // 有真名时「主控」→真名；from 端同样归一
+  const named = normalizeFacts({ relations: [{ from: '主控', to: '艾莉娅', note: '下属' }] }, '李明');
+  assert.deepEqual(named.relations, [{ from: '李明', to: '艾莉娅', note: '下属' }]);
+  // 同一条边一边写真名一边写「主控」→ 归并为同一条（不裂图）
+  const memory = { facts: emptyFacts() };
+  applyTurnFactsToMemory(memory, { relations: [{ from: '艾莉娅', to: '李明', note: '同事' }] }, '李明');
+  applyTurnFactsToMemory(memory, { relations: [{ from: '艾莉娅', to: '主控', note: '恋人' }] }, '李明');
+  assert.deepEqual(memory.facts.relations, [{ from: '艾莉娅', to: '李明', note: '恋人' }]);
+});

@@ -37,8 +37,9 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   // 使用本地可变副本，避免依赖 DOM 收集时出现的浏览器/时序问题
   let shortTermMemories = [...(chat.memory.shortTerm || [])];
   let longTermMemories = [...(chat.memory.longTerm || [])];
-  // 事实备忘（本地副本）
-  let factsEdit = normalizeFacts(chat.memory.facts);
+  // 事实备忘（本地副本）；mcName：主控真名，关系端点归一化用（「主控」→真名）
+  const mcName = (character && character.mainControl && character.mainControl.name) || '';
+  let factsEdit = normalizeFacts(chat.memory.facts, mcName);
   // 免费生图记忆（本地副本，保存时写回 chat.seedArchive；{角色名: {seed, anchor}} 形态）
   let seedArchiveEdit = Object.fromEntries(
     Object.entries(chat.seedArchive || {}).map(([k, v]) => [k, (v && typeof v === 'object')
@@ -587,7 +588,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
           // 参考最近几条旧长期（只读）与事实备忘：与自动压缩同一条路径
           const long = await summarizeShortTermMemories(shortTermMemories, {
             previousLongTerm: longTermMemories.slice(-LONG_TERM_REFERENCE_COUNT),
-            factsMemo: formatFactsMemo(factsEdit)
+            factsMemo: formatFactsMemo(factsEdit, mcName)
           });
           long.sourceRounds = shortTermMemories.map(s => s.round).filter(r => Number.isFinite(r));
           long.sourceTimestamps = shortTermMemories.map(s => s.turnTimestamp).filter(Boolean);
@@ -760,7 +761,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             text: String(i.text).trim(),
             knownBy: Array.isArray(i.knownBy) ? i.knownBy : []
           }))
-      });
+      }, mcName);
       // 免费生图记忆（种子 + 英文锚点）：保留有合法种子或非空锚点的记录
       const cleanedSeeds = {};
       for (const [name, rec] of Object.entries(seedArchiveEdit)) {

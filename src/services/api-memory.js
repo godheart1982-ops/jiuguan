@@ -89,7 +89,7 @@ export function normalizeIntelList(arr) {
     .slice(0, FACTS_INTEL_LIMIT);
 }
 
-export function normalizeFacts(raw) {
+export function normalizeFacts(raw, mcName) {
   const f = raw && typeof raw === 'object' ? raw : {};
   const promises = Array.isArray(f.promises)
     ? f.promises
@@ -100,7 +100,7 @@ export function normalizeFacts(raw) {
       .filter((p) => p.text)
       .slice(0, FACTS_PROMISE_LIMIT)
     : [];
-  const relations = normalizeRelationList(f.relations).slice(0, FACTS_RELATION_LIMIT);
+  const relations = normalizeRelationList(f.relations, mcName).slice(0, FACTS_RELATION_LIMIT);
   const worldEvents = Array.isArray(f.worldEvents)
     ? f.worldEvents
       .map((w) => ({
@@ -127,16 +127,24 @@ function normalizePromiseList(arr) {
 }
 
 // 关系条目统一为边形态 {from, to, note}（"from → to：note"，读作「from 是 to 的 note」）；
-// 旧星形 {name, note} 机械升级为 name → 主控（旧数据读取时自动迁移）
-function normalizeRelationList(arr) {
+// 旧星形 {name, note} 机械升级为 name → 主控（旧数据读取时自动迁移）。
+// 端点归一化：提供主控真名时，「主控」端点一律映射为真名——防止图谱裂成"主控/真名"两个节点
+function canonRelEndpoint(s, mcName) {
+  const v = String(s || '').trim();
+  const mc = String(mcName || '').trim();
+  if (v === '主控' && mc) return mc;
+  return v;
+}
+
+function normalizeRelationList(arr, mcName) {
   if (!Array.isArray(arr)) return [];
   return arr
     .map((r) => {
-      if (typeof r === 'string') return { from: r.trim(), to: '主控', note: '' };
+      if (typeof r === 'string') return { from: r.trim(), to: canonRelEndpoint('主控', mcName), note: '' };
       const name = String((r && r.name) || '').trim();
       return {
-        from: String((r && r.from) || '').trim() || name,
-        to: String((r && r.to) || '').trim() || '主控',
+        from: canonRelEndpoint(String((r && r.from) || '').trim() || name, mcName),
+        to: canonRelEndpoint(String((r && r.to) || '').trim() || '主控', mcName),
         note: String((r && r.note) || '').trim()
       };
     })
@@ -181,10 +189,11 @@ function normalizeWorldEventList(arr) {
  *   字段未提供时（如旧数据回填）对应清单不动
  * @param {Object} memory chat.memory
  * @param {{ content?: string, promises?: any[], relations?: any[], worldEvents?: any[], intel?: any[] }} turn
+ * @param {string} [mcName] 主控真名（关系端点归一化用：「主控」→真名）
  */
-export function applyTurnFactsToMemory(memory, turn) {
+export function applyTurnFactsToMemory(memory, turn, mcName) {
   if (!memory || typeof memory !== 'object') return;
-  const facts = normalizeFacts(memory.facts);
+  const facts = normalizeFacts(memory.facts, mcName);
   const deltaWorld = [
     ...normalizeWorldEventList(turn && turn.worldEvents),
     ...parseWorldEventsFromContent(turn && turn.content)
@@ -220,7 +229,7 @@ export function applyTurnFactsToMemory(memory, turn) {
   // AI 没提到的旧边排到队尾保留（防误删静水关系），随条数上限自然淘汰；
   // 未提供 relations 字段时（如旧数据回填）不动现有关系
   if (turn && Array.isArray(turn.relations)) {
-    const aiRelations = normalizeRelationList(turn.relations);
+    const aiRelations = normalizeRelationList(turn.relations, mcName);
     const aiKeys = new Set(aiRelations.map(relationEdgeKey));
     const rescued = facts.relations.filter((r) => !aiKeys.has(relationEdgeKey(r)));
     facts.relations = [...rescued, ...aiRelations].slice(-FACTS_RELATION_LIMIT);
@@ -254,8 +263,8 @@ export function applyTurnFactsToMemory(memory, turn) {
 /**
  * 注入 system 的【事实备忘】正文；全空则返回 ''
  */
-export function formatFactsMemo(factsRaw) {
-  const facts = normalizeFacts(factsRaw);
+export function formatFactsMemo(factsRaw, mcName) {
+  const facts = normalizeFacts(factsRaw, mcName);
   const lines = [];
   const openPromises = facts.promises.filter((p) => p.status !== 'done');
   if (openPromises.length) {
@@ -413,7 +422,11 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, co
 
   // 当前人物关系 / 知情情报清单：与约定同机制——AI 逐条核对后全量重写
   //（对齐名字变体、刷新过期 note、对齐情报文本与 knownBy，杜绝同一人/同一秘密多份矛盾条目）
-  const relList = Array.isArray(context.currentRelations) ? context.currentRelations.filter(r => r && r.name) : [];
+  // 关系端点归一化：「主控」一律映射为主控真名，防止图谱裂成"主控/真名"两个节点
+  const relList = normalizeRelationList(
+    Array.isArray(context.currentRelations) ? context.currentRelations.filter(r => r && (r.from || r.name)) : [],
+    context.mainControlName
+  );
   const relNote = relList.length
     ? `\n当前人物关系图谱（relations 字段需逐条核对）：\n${relList.map((r, i) => `${i + 1}. ${r.from} → ${r.to}${r.note ? '：' + r.note : ''}`).join('\n')}\n`
     : '';
@@ -451,7 +464,7 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, co
    照抄例外：不符合三道闸的旧约定直接标 done 移出 open 清单（视为自然淘汰）。
    诚意标记【必须辨别】：明显敷衍/欺骗/安抚式的承诺仍然记录（它是"对方信了的债"，拆穿时是戏），但文本前加标记：【敷衍】=说说而已没打算兑现（如「【敷衍】周五陪她看电影」）；【谎言】=刻意欺骗对方（如「【谎言】保证没有别人」）。标记后可注明谁骗谁（如「（她信了，他没打算去）」）；拿不准是否真诚时按真诚记录，禁止乱标。
 7. relations【强制检查·全量重写】：输出本轮之后的**完整人物关系图谱**——关系以边表示："from → to：note"，读作「from 是 to 的 note」；一段关系默认只写一行（关系天然是双向的，如「上司」自然蕴含对方是下属），仅当两边视角/认知真正不同时才追加反向行（示范：「林晚 → 苏晴：母亲（自知，瞒着苏晴）」+「苏晴 → 林晚：阿姨（误认，不知是生母）」）。反向认知行的 note 必须带认知标记（误认/不知情/以为），无标记的反向行不合法——否则一真一假两条边无法分辨哪个是事实。认知不对称的秘密本体应同时记入 intel（带 knownBy）。从上方「当前人物关系图谱」逐条核对：没变的边**原样照抄**（from/to/note 都不许改）；关系有实质变化的就地更新 note；新出现的重要关系追加。清单为空且本轮无新关系时输出 []。不要编造。
-   端点规则【硬性】：端点一律使用该人物最近出现过的**全名**，禁止昵称/爱称/缩写当端点（图谱只用正式名，昵称留在正文）；涉及主控的边，主控端固定写「主控」。
+   端点规则【硬性】：端点一律使用该人物最近出现过的**全名**，禁止昵称/爱称/缩写当端点（图谱只用正式名，昵称留在正文）；涉及主控的边，主控端固定写主控的真实全名（见登场人物参照），禁止写「主控」二字。
    NPC间关系【重点·禁止遗漏】：AI 容易只盯主控的关系——本轮中 NPC 之间新建立/变化/揭示的关系（相识、结盟、结仇、亲属关系揭示等）同样必须记为边，即使主控不在场或不知情（图谱是给叙事者看的，不是主控的视野）。
    note 格式【硬性】：只写身份关系+可选的简短状态词（如「上司，手持裁员名单」「同班同学，暧昧」），≤15字；【禁止】态度描写（如"表面冷淡实则关心"）、动机/心理解释（如"因为愧疚"）、行为预测（如"会暗中帮他"）——人物性格与态度由角色卡与剧情呈现，不记入备忘。
    照抄例外：旧 note 若含态度/动机/行为描写或超过15字，就地精简为上述格式（保留身份关系与核心状态词）。
