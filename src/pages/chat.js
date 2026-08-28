@@ -3,7 +3,7 @@ import { getCharacter, getAvatarDataUrl, listChats, getChat, saveChat, deleteCha
 import { DEFAULT_AUTO_ADVANCE_PROMPT } from '../services/narrative-rules.js';
 import { openMemoryEditor, migrateMemory } from './memory-editor.js';
 import { countTokens } from '../utils/tokenizer.js';
-import { isSearchReady, runWebSearch, formatSearchReferenceBrief, buildSearchQueryFromInput } from '../services/search-api.js';
+import { isSearchReady, runWebSearch, formatSearchReferenceBrief, buildSearchQueryFromInput, extractUrlContent } from '../services/search-api.js';
 import {
   escapeHtml, defaultAvatarUrl, scrollToBottom, renderEmptyChat
 } from './chat/chat-utils.js';
@@ -157,7 +157,7 @@ export async function renderChat(container, characterId, chatId) {
           <button type="button" class="btn btn-ghost btn-small" id="btn-search-clear">清除</button>
         </span>
       </div>
-      <pre class="search-mount-detail hidden" id="search-mount-detail"></pre>
+      <div class="search-mount-detail hidden" id="search-mount-detail"></div>
     </div>
     <div class="chat-input-wrapper">
       <textarea class="chat-input" id="chat-input" placeholder="输入消息..." rows="1"></textarea>
@@ -257,14 +257,56 @@ export async function renderChat(container, characterId, chatId) {
     mountedSearch = null;
     searchMountBar.classList.add('hidden');
     searchMountDetail.classList.add('hidden');
-    searchMountDetail.textContent = '';
+    searchMountDetail.innerHTML = '';
     btnSearchExpand.textContent = '展开';
+  }
+
+  // 展开区渲染：每条一个卡片（标题+摘要/全文+链接+抓全文按钮）
+  // 抓全文：AnySearch /v1/extract 抓该条 URL 的完整正文，替换摘要并同步重建注入用 brief
+  function renderSearchDetail() {
+    if (!mountedSearch) { searchMountDetail.innerHTML = ''; return; }
+    searchMountDetail.innerHTML =
+      `<div style="margin-bottom:6px;">【联网参考·仅本轮·事实摘录】查询：${escapeHtml(mountedSearch.query)}</div>` +
+      mountedSearch.items.map((it, i) => `
+        <div class="search-mount-item">
+          <div style="font-weight:600;">${i + 1}. ${escapeHtml(it.title || '（无标题）')}</div>
+          ${it.snippet ? `<div style="white-space:pre-wrap; margin:2px 0;">${escapeHtml(it.snippet)}</div>` : ''}
+          <div style="display:flex; align-items:center; gap:8px; margin-top:2px;">
+            ${it.url ? `<span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:0.65;">${escapeHtml(it.url)}</span>` : ''}
+            ${it.url ? `<button type="button" class="btn btn-ghost btn-small btn-extract-full" data-index="${i}" ${it.extracted ? 'disabled' : ''}>${it.extracted ? '已抓全文' : '抓全文'}</button>` : ''}
+          </div>
+        </div>
+      `).join('');
+
+    searchMountDetail.querySelectorAll('.btn-extract-full').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!mountedSearch) return;
+        const i = parseInt(btn.dataset.index, 10);
+        const it = mountedSearch.items[i];
+        if (!it || !it.url || it.extracted) return;
+        btn.disabled = true;
+        btn.textContent = '抓取中…';
+        try {
+          const cfg = await getConfig().catch(() => ({}));
+          const full = await extractUrlContent(it.url, cfg.search);
+          it.snippet = full;
+          it.extracted = true;
+          mountedSearch.brief = formatSearchReferenceBrief(mountedSearch.query, mountedSearch.items);
+          renderSearchDetail();
+          showMemoryStatus(`📄 第 ${i + 1} 条全文已替换（约 ${full.length} 字）`, 'success');
+        } catch (e) {
+          showMemoryStatus('📄 抓取失败：' + ((e && e.message) || e), 'error');
+          btn.disabled = false;
+          btn.textContent = '抓全文';
+        }
+      });
+    });
   }
 
   function setMountedSearch(payload) {
     mountedSearch = payload;
     searchMountLabel.textContent = `📎 已挂载联网参考 · ${payload.items.length} 条 · 「${payload.query.slice(0, 24)}${payload.query.length > 24 ? '…' : ''}」`;
-    searchMountDetail.textContent = payload.brief;
+    renderSearchDetail();
     searchMountDetail.classList.add('hidden');
     btnSearchExpand.textContent = '展开';
     searchMountBar.classList.remove('hidden');

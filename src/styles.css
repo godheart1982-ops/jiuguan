@@ -1002,6 +1002,15 @@ body {
   border-radius: var(--radius-sm, 6px);
 }
 
+/* 联网参考展开区条目（带抓全文按钮） */
+.search-mount-item {
+  padding: 6px 0;
+  border-top: 1px solid rgba(217, 119, 6, 0.15);
+}
+.search-mount-item:first-of-type {
+  border-top: none;
+}
+
 .chat-input-wrapper {
   display: flex;
   gap: 10px;

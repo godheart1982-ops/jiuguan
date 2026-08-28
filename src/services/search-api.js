@@ -22,6 +22,8 @@ const QUERY_MAX_LEN = 200;
 // 5 条 × 8000 ≈ 40K 字符单次，相对主设定仍可控；嫌长由用户减条数。
 const SNIPPET_MAX_LEN = 8000;
 const TITLE_MAX_LEN = 160;
+// extract 抓全文上限：全文比摘要长一个量级，防个别超长页面灌爆
+export const EXTRACT_MAX_LEN = 20000;
 
 export function normalizeSearchConfig(raw) {
   const s = raw && typeof raw === 'object' ? raw : {};
@@ -196,4 +198,57 @@ export function formatSearchReferenceBrief(query, items) {
 export async function testSearchApi(searchCfg) {
   const result = await runWebSearch('hello world', { ...normalizeSearchConfig(searchCfg), enabled: true });
   return result;
+}
+
+/**
+ * AnySearch 原生正文提取：POST {baseUrl}/v1/extract，抓指定 URL 的完整正文（Markdown）
+ * 用于搜索结果摘要太短时的按需深挖；失败（反爬/超时/非 HTML）向上抛错
+ * @returns {Promise<string>} 正文全文（截断至 EXTRACT_MAX_LEN）
+ */
+export async function extractUrlContent(url, searchCfg) {
+  const cfg = normalizeSearchConfig(searchCfg);
+  const u = String(url || '').trim();
+  if (!u) throw new Error('缺少要提取的 URL');
+  if (!/^https?:\/\//i.test(u)) throw new Error('URL 格式不合法');
+  if (!cfg.enabled) throw new Error('请先在 API 设置 → 搜索 API 中启用联网检索');
+  if (!cfg.baseUrl) throw new Error('未配置搜索 API Base URL');
+
+  // extract 端点与 search 同主机：容忍 baseUrl 带 /v1 或 /v1/search 的填法
+  const base = cfg.baseUrl.replace(/\/+$/, '').replace(/\/v1(\/search)?$/i, '');
+  const extractUrl = base + '/v1/extract';
+  const headers = { 'Content-Type': 'application/json' };
+  if (cfg.apiKey) headers['Authorization'] = 'Bearer ' + cfg.apiKey;
+
+  let response;
+  try {
+    response = await fetch(extractUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ url: u })
+    });
+  } catch (e) {
+    throw new Error('提取网络请求失败：' + (e.message || e));
+  }
+
+  let data = null;
+  const rawText = await response.text().catch(() => '');
+  try { data = JSON.parse(rawText); } catch (e) { data = null; }
+
+  if (!response.ok) {
+    const detail = (data && (data.message || (data.error && data.error.message))) || rawText || ('HTTP ' + response.status);
+    throw new Error(`正文提取失败 (${response.status})：${String(detail).slice(0, 200)}`);
+  }
+  if (data && typeof data === 'object' && data.code !== undefined && data.code !== 0 && data.code !== '0') {
+    throw new Error(data.message || ('提取失败 code=' + data.code));
+  }
+
+  // 兼容常见返回形态：data 为字符串 / data.content|markdown|text / 顶层同名字段
+  const content = (typeof data === 'string') ? data
+    : (typeof (data && data.data) === 'string') ? data.data
+    : String(
+      (data && data.data && (data.data.content || data.data.markdown || data.data.text)) ||
+      (data && (data.content || data.markdown || data.text)) || ''
+    ).trim();
+  if (!content) throw new Error('提取成功但正文为空（该页面可能无正文内容）');
+  return content.length > EXTRACT_MAX_LEN ? content.slice(0, EXTRACT_MAX_LEN) + '\n（正文过长，已截断）' : content;
 }
