@@ -18,9 +18,9 @@ export const DEFAULT_SEARCH_CONFIG = {
 };
 
 const QUERY_MAX_LEN = 200;
-// 单条正文上限：角色卡本身常几十 K，检索参考不必抠到 200 字。
-// 5 条 × 2500 ≈ 12K 量级，相对主设定仍可控；再长由用户减条数。
-const SNIPPET_MAX_LEN = 2500;
+// 单条正文上限：一次性注入（仅挂载轮生效），宁宽勿缺——长文腰斩比噪音更伤。
+// 5 条 × 8000 ≈ 40K 字符单次，相对主设定仍可控；嫌长由用户减条数。
+const SNIPPET_MAX_LEN = 8000;
 const TITLE_MAX_LEN = 160;
 
 export function normalizeSearchConfig(raw) {
