@@ -136,6 +136,24 @@ test('applyTurnFacts: relations 未被提及的旧边排队尾保留（防误删
   ]);
 });
 
+test('applyTurnFacts: 关系 note 的进度数值段原样存取、可按全量重写刷新', () => {
+  const memory = { facts: emptyFacts() };
+  // 数值段只是 note 自由文本的一部分：归一化/存储链路不得拆改
+  applyTurnFactsToMemory(memory, {
+    relations: [{ from: '苏晴', to: '李明', note: '同事｜好感45/100｜服从20/100｜阶段:信任' }]
+  }, '李明');
+  assert.deepEqual(memory.facts.relations, [
+    { from: '苏晴', to: '李明', note: '同事｜好感45/100｜服从20/100｜阶段:信任' }
+  ]);
+  // 全量重写时同一条边（from+to 双键一致）数值段就地刷新
+  applyTurnFactsToMemory(memory, {
+    relations: [{ from: '苏晴', to: '李明', note: '同事｜好感48/100｜服从20/100｜阶段:信任' }]
+  }, '李明');
+  assert.deepEqual(memory.facts.relations, [
+    { from: '苏晴', to: '李明', note: '同事｜好感48/100｜服从20/100｜阶段:信任' }
+  ]);
+});
+
 test('applyTurnFacts: intel 全量重写——text 照抄、knownBy 全量更新（「她得知了」核心路径）', () => {
   const memory = { facts: emptyFacts() };
   applyTurnFactsToMemory(memory, { intel: [{ text: '主控已婚', knownBy: ['主控'] }] });
@@ -214,6 +232,24 @@ test('formatFactsMemo: 分区齐全且含硬性知情约束；worldEvents 已废
   assert.ok(memo.includes('· 「主控已婚」可知：主控'));
   assert.ok(memo.includes('· 「公司要裁员」可知：公开'));
   assert.ok(memo.includes('· 「隐藏情报」可知：（暂无，仅作隐藏情报）'));
+});
+
+test('formatFactsMemo: 关系区声明数值冻结/续写锚点语义，数值段随 note 原样注入', () => {
+  const memo = formatFactsMemo({
+    promises: [],
+    relations: [
+      { from: '苏晴', to: '李明', note: '同事｜好感45/100｜阶段:信任' },
+      { from: '苏晴', to: '林晚', note: '合租室友' }
+    ],
+    worldEvents: [], intel: []
+  }, '李明');
+  // 注入区必须向主模型声明：数值是最新冻结值、重新出场以此为锚、未出场禁止漂移
+  assert.ok(memo.includes('最新冻结数值'));
+  assert.ok(memo.includes('续写锚点'));
+  assert.ok(memo.includes('禁止漂移'));
+  // 数值段作为 note 一部分原样注入；NPC 间无边值不受影响
+  assert.ok(memo.includes('· 苏晴 → 李明：同事｜好感45/100｜阶段:信任'));
+  assert.ok(memo.includes('· 苏晴 → 林晚：合租室友'));
 });
 
 // ---------- 世界事件标记提取 ----------

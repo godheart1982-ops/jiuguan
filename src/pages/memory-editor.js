@@ -259,7 +259,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             <input type="text" class="form-input fact-rel-to" data-index="${index}" value="${escapeHtml(r.to || '')}" placeholder="B（全名或主控）" style="width:110px;">
             <button class="btn btn-danger btn-small btn-del-rel" data-index="${index}">删除</button>
           </div>
-          <input type="text" class="form-input fact-rel-note" data-index="${index}" value="${escapeHtml(r.note || '')}" placeholder="A 是 B 的…（身份关系+状态词，如：上司，手持裁员名单）">
+          <input type="text" class="form-input fact-rel-note" data-index="${index}" value="${escapeHtml(r.note || '')}" placeholder="A 是 B 的…（身份关系+状态词；指向主控可附数值段，如：同事｜好感45/100｜阶段:信任）">
         </div>
       `).join('');
       const intelRows = (factsEdit.intel || []).map((item, index) => `
