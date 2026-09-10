@@ -3,7 +3,7 @@
  */
 
 import { getConfig } from './storage.js';
-import { EVENT_SYSTEM_RULE, RANDOM_NPC_RULE, IMMERSIVE_ACTING_RULE } from './narrative-rules.js';
+import { EVENT_SYSTEM_RULE, RANDOM_NPC_RULE, buildImmersiveActingRule } from './narrative-rules.js';
 import { isPaidImageProvider } from './image-gen.js';
 import { sanitizeHistoryIllustrationMarkers } from './illustration-markers.js';
 import { resolveWorldBookInjection } from './world-book.js';
@@ -89,9 +89,11 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   }
 
   // 沉浸演绎·反AI腔总则：放在输出格式要求之后（先立格式、再立腔调），静态文本可进缓存
-  // 开关在「其他设置 → 生成行为」（behavior.immersiveActing），默认开
-  if (!config.behavior || config.behavior.immersiveActing !== false) {
-    systemContent += '\n\n' + IMMERSIVE_ACTING_RULE;
+  // 总开关+四个子开关在「其他设置 → 生成行为」（behavior.immersiveActing 等），默认全开；
+  // 子开关可只留部分条目（按模型病灶微调），全部关闭则不注入
+  const immersiveRule = buildImmersiveActingRule(config.behavior || {});
+  if (immersiveRule) {
+    systemContent += '\n\n' + immersiveRule;
   }
 
   // 插图功能（App 级开关）：规则文本是静态的，放在记忆区之前可进缓存
