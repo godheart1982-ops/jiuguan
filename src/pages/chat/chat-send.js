@@ -4,6 +4,7 @@
 import { getConfig, saveChat, writeChatPing, deleteChatPing } from '../../services/storage.js';
 import { THINKING_PREFILL, buildMessages } from '../../services/api-messages.js';
 import { sendChat, sendChatStream } from '../../services/api.js';
+import { setRequestSessionId } from '../../services/api-headers.js';
 import {
   summarizeTurn, trimAssistantForMemory, resolveMemoryApi,
   applyTurnFactsToMemory, RAW_WINDOW_TURNS,
@@ -189,6 +190,9 @@ export function createSendController(deps) {
       }
 
       // 流式请求，逐字显示；同时定期保存中间结果，方便切角色卡后回来能看到
+      // 会话 ID 设为当前对话 id：自定义请求头（如 opencode Go 的 x-opencode-session）按此路由；
+      // 后台记忆/补全任务沿用同一会话（都属于这个对话），语义正确
+      setRequestSessionId(chat.id);
       stopBtn.classList.remove('hidden');
       let lastSaveTime = 0;
       const SAVE_INTERVAL = 1000;

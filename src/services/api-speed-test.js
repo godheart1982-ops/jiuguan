@@ -9,6 +9,7 @@
  */
 
 import { parseSSELine, makeOpenAISSEParser, sendChatStreamAuto } from './api-transport.js';
+import { buildCustomHeaders } from './api-headers.js';
 import { sendChatStreamAnthropic } from './api-anthropic.js';
 import { countTokens } from '../utils/tokenizer.js';
 
@@ -179,7 +180,9 @@ export function runSpeedTestRound(apiConfig, prompt) {
     const url = `${apiConfig.baseUrl.replace(/\/$/, '')}/chat/completions`;
     const headers = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiConfig.apiKey}`
+      Authorization: `Bearer ${apiConfig.apiKey}`,
+      // 自定义请求头（测速走真实通道，需与聊天请求一致）
+      ...buildCustomHeaders(apiConfig.customHeaders, 'speedtest')
     };
     // 思考显隐跟随配置：显示推理时思考块也触发 onChunk，TTFT = 首个可见 token（与聊天页观感一致）
     const parseLine = apiConfig.deepseekThinking

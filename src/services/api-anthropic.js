@@ -3,6 +3,7 @@
  */
 
 import { sendChatStreamAuto } from './api-transport.js';
+import { buildCustomHeaders } from './api-headers.js';
 import { recordUsage } from './token-stats.js';
 
 function buildAnthropicBody(messages, api, stream) {
@@ -64,12 +65,14 @@ function buildAnthropicBody(messages, api, stream) {
   return body;
 }
 
-function anthropicHeaders(apiKey) {
+function anthropicHeaders(apiKey, customRaw, chatId) {
   return {
     'Content-Type': 'application/json',
     'x-api-key': apiKey,
     'anthropic-version': '2023-06-01',
-    'anthropic-beta': 'prompt-caching-2024-07-31'
+    'anthropic-beta': 'prompt-caching-2024-07-31',
+    // 自定义请求头（含 {{chatId}} 占位）：放最后，允许覆盖同名默认头
+    ...buildCustomHeaders(customRaw, chatId)
   };
 }
 
@@ -150,7 +153,7 @@ export async function sendChatAnthropic(messages, api) {
   const body = buildAnthropicBody(messages, api, false);
   const response = await fetch(`${api.baseUrl.replace(/\/$/, '')}/messages`, {
     method: 'POST',
-    headers: anthropicHeaders(api.apiKey),
+    headers: anthropicHeaders(api.apiKey, api.customHeaders),
     body: JSON.stringify(body)
   });
   if (!response.ok) {
@@ -176,7 +179,7 @@ export async function sendChatAnthropic(messages, api) {
 export async function sendChatStreamAnthropic(messages, callbacks, api, controller, usageContext = {}) {
   const body = buildAnthropicBody(messages, api, true);
   const url = `${api.baseUrl.replace(/\/$/, '')}/messages`;
-  const headers = anthropicHeaders(api.apiKey);
+  const headers = anthropicHeaders(api.apiKey, api.customHeaders, usageContext.chatId);
   const bodyStr = JSON.stringify(body);
   const onUsage = (usage) => {
     recordUsage(usage, 'anthropic', { ...usageContext, model: api.model });

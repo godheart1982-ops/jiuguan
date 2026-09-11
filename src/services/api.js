@@ -6,6 +6,7 @@
 import { getConfig } from './storage.js';
 import { THINKING_PREFILL } from './api-messages.js';
 import { wrapCallbacksWithPrefill, resolvePrefillUrl, sendChatStreamAuto, parseSSELine, makeOpenAISSEParser } from './api-transport.js';
+import { buildCustomHeaders } from './api-headers.js';
 import { sendChatAnthropic, sendChatStreamAnthropic } from './api-anthropic.js';
 import { recordUsage } from './token-stats.js';
 
@@ -49,7 +50,9 @@ export async function sendChat(messages, options = {}) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${useApi.apiKey}`
+      'Authorization': `Bearer ${useApi.apiKey}`,
+      // 自定义请求头（含 {{chatId}} 占位）：放最后，允许覆盖同名默认头
+      ...buildCustomHeaders(useApi.customHeaders, options.chatId)
     },
     body: JSON.stringify(body)
   };
@@ -189,7 +192,9 @@ export function sendChatStream(messages, callbacks, usageContext = {}) {
     const requestBody = JSON.stringify(body);
     const headers = {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${api.apiKey}`
+      'Authorization': `Bearer ${api.apiKey}`,
+      // 自定义请求头（含 {{chatId}} 占位）：放最后，允许覆盖同名默认头
+      ...buildCustomHeaders(api.customHeaders, usageContext.chatId)
     };
 
     try {

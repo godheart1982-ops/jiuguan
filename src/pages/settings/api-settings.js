@@ -2,6 +2,7 @@ import { getConfig, saveConfig, saveApiProfile, getApiProfiles, deleteApiProfile
 import { attachCharCounter } from '../../utils/counter.js';
 import { normalizeSearchConfig, testSearchApi, DEFAULT_SEARCH_CONFIG } from '../../services/search-api.js';
 import { escapeHtml, renderProfileOptions } from './settings-shared.js';
+import { buildCustomHeaders } from '../../services/api-headers.js';
 import { promptText } from '../../utils/prompt-dialog.js';
 import { createSpeedTestController } from './speed-test-ui.js';
 
@@ -65,6 +66,12 @@ export async function renderApiSettingsModal() {
             <option value="anthropic" ${api.format === 'anthropic' ? 'selected' : ''}>Anthropic 原生（支持 prompt caching）</option>
           </select>
           <div class="form-hint">Anthropic 原生格式可启用稳定的 5 分钟 prompt 缓存，适用于直连或反代 Anthropic 接口；与思维链预填充互斥（Anthropic 格式下预填充自动跳过）。</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">自定义请求头（选填，每行一个）</label>
+          <textarea class="form-input" id="setting-custom-headers" rows="3" style="font-family: monospace; font-size: 0.85rem;" placeholder="x-opencode-session: {{chatId}}">${escapeHtml(api.customHeaders || '')}</textarea>
+          <div class="form-hint">每行格式 Key: Value；{{chatId}} 会替换为当前对话 ID（每个对话固定不变）。opencode Go 会员填：x-opencode-session: {{chatId}}。自定义头在默认头之后生效，可覆盖同名默认头。</div>
         </div>
 
         <div class="form-row">
@@ -202,6 +209,11 @@ export async function renderApiSettingsModal() {
             <div class="form-group">
               <label class="form-label">模型名称</label>
               <input class="form-input" id="setting-sub-model" type="text" value="${escapeHtml((api.memoryApi && api.memoryApi.model) || '')}" placeholder="例如 claude-haiku-4-5 / gpt-4o-mini">
+            </div>
+            <div class="form-group">
+              <label class="form-label">自定义请求头（选填，每行一个）</label>
+              <textarea class="form-input" id="setting-sub-custom-headers" rows="2" style="font-family: monospace; font-size: 0.85rem;" placeholder="x-opencode-session: {{chatId}}">${escapeHtml((api.memoryApi && api.memoryApi.customHeaders) || '')}</textarea>
+              <div class="form-hint">副 API 独立生效，不继承主 API 的请求头；格式同主 API。</div>
             </div>
             <div class="form-row">
               <div class="form-group">
@@ -354,6 +366,7 @@ export async function renderApiSettingsModal() {
       deepseekReasoningEffort: document.getElementById('setting-deepseek-effort').value || 'high',
       showThinking: thinkingMode === 'native' ? document.getElementById('setting-show-thinking').checked : (api.showThinking === true),
       format,
+      customHeaders: document.getElementById('setting-custom-headers').value.trim(),
       memoryApi: readSubApi()
     };
   }
@@ -373,7 +386,8 @@ export async function renderApiSettingsModal() {
       apiKey,
       model,
       temperature: (t !== null && !isNaN(t)) ? t : null,
-      maxTokens: (m !== null && !isNaN(m)) ? m : null
+      maxTokens: (m !== null && !isNaN(m)) ? m : null,
+      customHeaders: document.getElementById('setting-sub-custom-headers').value.trim()
     };
   }
 
@@ -382,6 +396,7 @@ export async function renderApiSettingsModal() {
     document.getElementById('setting-sub-base-url').value = o.baseUrl || '';
     document.getElementById('setting-sub-api-key').value = o.apiKey || '';
     document.getElementById('setting-sub-model').value = o.model || '';
+    document.getElementById('setting-sub-custom-headers').value = o.customHeaders || '';
     document.getElementById('setting-sub-temperature').value = (o.temperature !== undefined && o.temperature !== null) ? o.temperature : '';
     document.getElementById('setting-sub-max-tokens').value = (o.maxTokens !== undefined && o.maxTokens !== null) ? o.maxTokens : '';
   }
@@ -407,6 +422,7 @@ export async function renderApiSettingsModal() {
     document.getElementById('setting-deepseek-effort').value = apiConfig.deepseekReasoningEffort || 'high';
     document.getElementById('setting-show-thinking').checked = apiConfig.showThinking === true;
     document.getElementById('setting-format').value = apiConfig.format || 'openai';
+    document.getElementById('setting-custom-headers').value = apiConfig.customHeaders || '';
     syncThinkingFields();
   }
 
@@ -610,7 +626,8 @@ export async function renderApiSettingsModal() {
             'Content-Type': 'application/json',
             'x-api-key': apiConfig.apiKey,
             'anthropic-version': '2023-06-01',
-            'anthropic-beta': 'prompt-caching-2024-07-31'
+            'anthropic-beta': 'prompt-caching-2024-07-31',
+            ...buildCustomHeaders(apiConfig.customHeaders, 'test')
           },
           body: JSON.stringify({
             model: apiConfig.model,
@@ -624,7 +641,8 @@ export async function renderApiSettingsModal() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiConfig.apiKey}`
+            'Authorization': `Bearer ${apiConfig.apiKey}`,
+            ...buildCustomHeaders(apiConfig.customHeaders, 'test')
           },
           body: JSON.stringify({
             model: apiConfig.model,

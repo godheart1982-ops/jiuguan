@@ -314,7 +314,9 @@ export function resolveMemoryApi(api) {
       model: m.model,
       temperature: (m.temperature !== undefined && m.temperature !== null) ? m.temperature : api.temperature,
       temperatureEnabled: m.temperatureEnabled !== undefined ? m.temperatureEnabled : api.temperatureEnabled,
-      maxTokens: (m.maxTokens !== undefined && m.maxTokens !== null) ? m.maxTokens : api.maxTokens
+      maxTokens: (m.maxTokens !== undefined && m.maxTokens !== null) ? m.maxTokens : api.maxTokens,
+      // 副 API 是独立服务商：只用自己的自定义请求头，不继承主 API 的（避免把会话头泄漏给别家）
+      customHeaders: m.customHeaders || ''
     };
   }
   return api;
