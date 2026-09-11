@@ -538,12 +538,9 @@ export async function getApiProfiles() {
   return config.apiProfiles || {};
 }
 
-export async function saveApiProfile(name, apiConfig) {
-  const config = await getConfig();
-  if (!config.apiProfiles) {
-    config.apiProfiles = {};
-  }
-  config.apiProfiles[name] = {
+// 方案白名单：存方案时只保留这些字段（防脏字段混入）——新增 API 字段时必须同步这里，否则方案存读会丢字段
+export function toApiProfile(apiConfig) {
+  return {
     baseUrl: apiConfig.baseUrl,
     apiKey: apiConfig.apiKey,
     model: apiConfig.model,
@@ -556,8 +553,17 @@ export async function saveApiProfile(name, apiConfig) {
     deepseekThinking: apiConfig.deepseekThinking,
     deepseekReasoningEffort: apiConfig.deepseekReasoningEffort,
     prefillThinking: apiConfig.prefillThinking,
-    enableThinking: apiConfig.enableThinking
+    enableThinking: apiConfig.enableThinking,
+    customHeaders: apiConfig.customHeaders || ''
   };
+}
+
+export async function saveApiProfile(name, apiConfig) {
+  const config = await getConfig();
+  if (!config.apiProfiles) {
+    config.apiProfiles = {};
+  }
+  config.apiProfiles[name] = toApiProfile(apiConfig);
   await saveConfig(config);
 }
 

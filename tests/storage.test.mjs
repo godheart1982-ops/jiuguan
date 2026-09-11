@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import {
   mergePreservingSecrets,
   redactSecretsInObject,
-  normalizeChatMemory
+  normalizeChatMemory,
+  toApiProfile
 } from '../src/services/storage.js';
 
 // ---------- mergePreservingSecrets ----------
@@ -104,4 +105,33 @@ test('normalizeChatMemory: 非对象输入安全返回', () => {
     normalizeChatMemory(undefined);
     normalizeChatMemory('x');
   });
+});
+
+// ---------- toApiProfile ----------
+
+test('toApiProfile: 白名单字段完整（含 customHeaders），脏字段被剔除', () => {
+  const p = toApiProfile({
+    baseUrl: 'https://x/v1',
+    apiKey: 'sk-1',
+    model: 'm1',
+    temperature: 0.8,
+    temperatureEnabled: true,
+    maxTokens: 100,
+    format: 'openai',
+    reasoningEffort: 'off',
+    showThinking: false,
+    deepseekThinking: false,
+    deepseekReasoningEffort: 'high',
+    prefillThinking: false,
+    enableThinking: false,
+    customHeaders: 'x-opencode-session: {{chatId}}',
+    junkField: '不应出现'
+  });
+  assert.equal(p.customHeaders, 'x-opencode-session: {{chatId}}');
+  assert.equal('junkField' in p, false);
+  assert.equal(p.baseUrl, 'https://x/v1');
+});
+
+test('toApiProfile: customHeaders 缺省时回落空串', () => {
+  assert.equal(toApiProfile({}).customHeaders, '');
 });
