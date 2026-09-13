@@ -20,10 +20,11 @@
  *     → 被拒：L1 改写重试 → 再拒：L2 机械降级纯肖像
  */
 
-// 付费/本地服务商判断：seedream/wanx/grok/gemini/manual 都走"AI 空标记 + 本地出图"模式
-//（manual = 手动网页版：App 只出提示词，用户自行到网页版生图后选图插入）
+// 付费/本地服务商判断：seedream/wanx/grok/gemini/manual/grokweb 都走"AI 空标记 + 本地出图"模式
+//（manual = 手动网页版：App 只出提示词，用户自行到网页版生图后选图插入；
+// grokweb = 局域网自托管反代：grok.com 网页账号出的图，走 chat/completions 聊天格式）
 export function isPaidImageProvider(provider) {
-  return provider === 'seedream' || provider === 'wanx' || provider === 'grok' || provider === 'gemini' || provider === 'manual';
+  return provider === 'seedream' || provider === 'wanx' || provider === 'grok' || provider === 'gemini' || provider === 'manual' || provider === 'grokweb';
 }
 
 // 严格版机械生图：Seedream / 万相 / Gemini（无 compose，单人 only）
@@ -37,6 +38,7 @@ export function imageProviderDisplayName(provider) {
   if (provider === 'grok') return 'Grok 生图';
   if (provider === 'gemini') return 'Gemini 生图';
   if (provider === 'manual') return '手动网页版';
+  if (provider === 'grokweb') return 'Grok 网页反代';
   return '火山生图';
 }
 
@@ -432,6 +434,78 @@ async function generateGeminiImageViaChat({ apiKey, baseUrl, model, prompt }) {
       detail = '无法读取错误响应';
     }
     throw new Error(`生图 API 请求失败 (${response.status})：${detail}`);
+  }
+
+  const data = await response.json();
+  const message = data?.choices?.[0]?.message || {};
+  return await extractImageFromChatContent(message.content);
+}
+
+/**
+ * 构造 grokweb（局域网自托管反代）chat/completions 生图请求体（纯函数，可单测）。
+ * 反代（如 fandai）把 grok.com 网页账号包装成 OpenAI 聊天接口：发普通聊天请求，
+ * 网页版出图后图片以 markdown 链接混在回复文本里（图片后出也会等齐——见反代 WS 收流逻辑）。
+ */
+export function buildGrokWebChatBody(model, prompt) {
+  return {
+    model: (model || 'grok-4.6-fast').trim(),
+    messages: [
+      {
+        role: 'user',
+        content: `请生成一张图片：${prompt.trim()}\n要求：直接出图，画面按描述执行，不要输出任何解释或询问。`
+      }
+    ],
+    stream: false
+  };
+}
+
+/**
+ * grokweb 网页反代生图：POST {baseUrl}/chat/completions，OpenAI 兼容聊天格式
+ * 适配 fandai 类反代：grok.com 网页版无 /images/generations，图片经回复文本的
+ * markdown 链接返回（链接已指向反代 /image-proxy 回源，key 内嵌可直接下载）。
+ * @param {Object} opts
+ * @param {string} opts.apiKey  反代的 api_key（config.yaml 里的自定义 key）
+ * @param {string} opts.baseUrl 反代地址，如 http://192.168.2.42:8000/v1（兼容填到 /chat/completions）
+ * @param {string} opts.model   反代模型名，默认 grok-4.6-fast
+ * @param {string} opts.prompt  提示词（中文支持）
+ */
+export async function generateGrokWebImage({ apiKey, baseUrl, model, prompt }) {
+  if (!apiKey) throw new Error('未配置反代 API Key（插图设置 → Grok 网页反代 中填写）');
+  if (!prompt || !prompt.trim()) throw new Error('提示词为空');
+  const root = (baseUrl || '').replace(/\/+$/, '');
+  if (!root) throw new Error('Grok 网页反代需要填写 Base URL（反代地址，如 http://192.168.x.x:8000/v1）');
+  const url = /\/chat\/completions$/.test(root) ? root
+    : /\/v1$/.test(root) ? `${root}/chat/completions`
+    : `${root}/v1/chat/completions`;
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(buildGrokWebChatBody(model, prompt))
+    });
+  } catch (e) {
+    throw new Error(`网络请求失败：${e.message || e}`);
+  }
+
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        detail = json.error?.message || json.message || text;
+      } catch (e2) {
+        detail = text;
+      }
+    } catch (e3) {
+      detail = '无法读取错误响应';
+    }
+    throw new Error(`反代生图请求失败 (${response.status})：${detail}`);
   }
 
   const data = await response.json();
@@ -1100,6 +1174,10 @@ function resolveImageGenerator(config) {
     const gk = imgCfg.grok || {};
     return (prompt) => generateGrokImage({ ...gk, prompt });
   }
+  if (imgCfg.provider === 'grokweb') {
+    const gw = imgCfg.grokweb || {};
+    return (prompt) => generateGrokWebImage({ ...gw, prompt });
+  }
   if (imgCfg.provider === 'wanx') {
     const wx = imgCfg.wanx || {};
     return (prompt) => generateWanxImage({ ...wx, prompt });
@@ -1108,12 +1186,12 @@ function resolveImageGenerator(config) {
   return (prompt) => generateSeedreamImage({ ...sd, prompt });
 }
 
-// 提示词管线配置：manual（手动网页版）沿用 Grok 宽松管线（网页版审核由用户自己把握，宽松版最自由）
+// 提示词管线配置：manual（手动网页版）与 grokweb（网页反代）沿用 Grok 宽松管线（网页版审核由用户自己把握，宽松版最自由）
 // 严格版（seedream/gemini）不再走 compose，duoMode 强制 false；衣着库见 resolveStrictOutfitLibrary
 function buildPromptPipelineConfig(config) {
   const imgCfg = config.image || {};
   const rawProvider = imgCfg.provider || 'pollinations';
-  const provider = rawProvider === 'manual' ? 'grok' : rawProvider;
+  const provider = (rawProvider === 'manual' || rawProvider === 'grokweb') ? 'grok' : rawProvider;
   const apiConfig = config.api || {};
   const sdCfg = imgCfg.seedream || {};
   const gkCfg = imgCfg.grok || {};

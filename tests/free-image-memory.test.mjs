@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { migrateChat } from '../src/services/migrations.js';
-import { spliceAnchorIntoPollinationsUrl } from '../src/services/image-gen.js';
+import { spliceAnchorIntoPollinationsUrl, buildGrokWebChatBody, isPaidImageProvider, imageProviderDisplayName } from '../src/services/image-gen.js';
 
 // ---------- migrateChat: seedArchive 升级 ----------
 
@@ -45,4 +45,26 @@ test('spliceAnchorIntoPollinationsUrl: 幂等——已含锚点不重复拼；�
   assert.equal(spliceAnchorIntoPollinationsUrl(url, ''), url);
   assert.equal(spliceAnchorIntoPollinationsUrl(url, '   '), url);
   assert.equal(spliceAnchorIntoPollinationsUrl('https://example.com/x?a=1', ANCHOR), 'https://example.com/x?a=1');
+});
+
+// ---------- grokweb（网页反代）请求体构造 ----------
+
+test('buildGrokWebChatBody: 默认模型+生图指令包装+非流式', () => {
+  const body = buildGrokWebChatBody('', '竖向构图，黑色长发少女');
+  assert.equal(body.model, 'grok-4.6-fast');
+  assert.equal(body.stream, false);
+  assert.equal(body.messages.length, 1);
+  assert.equal(body.messages[0].role, 'user');
+  assert.ok(body.messages[0].content.includes('竖向构图，黑色长发少女'));
+  assert.ok(body.messages[0].content.includes('生成'));
+});
+
+test('buildGrokWebChatBody: 指定模型生效且去空白', () => {
+  const body = buildGrokWebChatBody('  grok-4.6-expert  ', '一只猫');
+  assert.equal(body.model, 'grok-4.6-expert');
+});
+
+test('grokweb 服务商注册：isPaidImageProvider 与显示名', () => {
+  assert.equal(isPaidImageProvider('grokweb'), true);
+  assert.equal(imageProviderDisplayName('grokweb'), 'Grok 网页反代');
 });

@@ -3,6 +3,7 @@ import {
   generateSeedreamImage,
   generateGeminiImage,
   generateGrokImage,
+  generateGrokWebImage,
   generateWanxImage,
   DEFAULT_GROK_COMPOSE_SYSTEM_PROMPT,
   DEFAULT_GROK_DUO_COMPOSE_SYSTEM_PROMPT,
@@ -29,6 +30,7 @@ export async function renderImageSettingsModal() {
   const gm = image.gemini || {};
   const wx = image.wanx || {};
   const gk = image.grok || {};
+  const gw = image.grokweb || {};
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -58,6 +60,7 @@ export async function renderImageSettingsModal() {
               <option value="wanx" ${image.provider === 'wanx' ? 'selected' : ''}>阿里百炼 万相（付费，compatible-mode）</option>
               <option value="gemini" ${image.provider === 'gemini' ? 'selected' : ''}>Google Gemini（付费，Nano Banana 系列）</option>
               <option value="grok" ${image.provider === 'grok' ? 'selected' : ''}>xAI Grok Imagine（付费，审核宽松）</option>
+              <option value="grokweb" ${image.provider === 'grokweb' ? 'selected' : ''}>Grok 网页反代（局域网自托管，grok.com 账号）</option>
               <option value="manual" ${image.provider === 'manual' ? 'selected' : ''}>手动模式（App 出提示词，自己到网页版生图后选图插入）</option>
             </select>
             <div class="form-hint">免费模式由 AI 直接拼在线生图 URL。严格版（Seedream/万相/Gemini）用外貌锚点 + 衣着模板库机械拼词后本地出图；Grok / 手动模式由副 API 总结提示词。图床 URL 会过期，本地存储不丢图。</div>
@@ -207,6 +210,23 @@ export async function renderImageSettingsModal() {
               </select>
             </div>
           </div>
+          <div id="group-grokweb-config">
+            <div class="form-group">
+              <label class="form-label">反代 Base URL</label>
+              <input class="form-input" id="setting-grokweb-base-url" type="text" value="${escapeHtml(gw.baseUrl || 'http://127.0.0.1:8000/v1')}" placeholder="http://192.168.x.x:8000/v1">
+              <div class="form-hint">局域网反代地址（一般到 /v1 为止，/chat/completions 由 App 自动拼接）；本机填 http://127.0.0.1:8000/v1，手机用电脑局域网 IP。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">反代 API Key</label>
+              <input class="form-input" id="setting-grokweb-api-key" type="password" value="${escapeHtml(gw.apiKey || '')}" placeholder="反代 config.yaml 里的 api_key">
+              <div class="form-hint">grok.com 网页账号出的图经反代 markdown 图片链接返回，App 自动下载转本地存储，反代不在线也不丢历史图。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">模型名</label>
+              <input class="form-input" id="setting-grokweb-model" type="text" value="${escapeHtml(gw.model || 'grok-4.6-fast')}" placeholder="grok-4.6-fast">
+              <div class="form-hint">以反代 /v1/models 返回的为准；网页版无宽高比/分辨率参数，构图写进提示词即可（管线已自动带"竖向构图"等镜头词）。</div>
+            </div>
+          </div>
           <div id="group-paid-common">
             <div class="form-group" id="group-strict-outfit-library">
               <label class="form-label">严格版衣着模板库（Seedream / Gemini 共用）</label>
@@ -331,21 +351,23 @@ export async function renderImageSettingsModal() {
     const isWanx = enabled && imageProviderEl.value === 'wanx';
     const isFree = enabled && imageProviderEl.value === 'pollinations';
     const isGrok = enabled && imageProviderEl.value === 'grok';
+    const isGrokWeb = enabled && imageProviderEl.value === 'grokweb';
     const isManual = enabled && imageProviderEl.value === 'manual';
     const isStrict = isSeedream || isGemini || isWanx;
-    const isGrokLike = isGrok || isManual;
+    const isGrokLike = isGrok || isManual || isGrokWeb;
     seedreamConfigGroup.style.display = isSeedream ? '' : 'none';
     geminiConfigGroup.style.display = isGemini ? '' : 'none';
     wanxConfigGroup.style.display = isWanx ? '' : 'none';
     pollinationsConfigGroup.style.display = isFree ? '' : 'none';
     grokConfigGroup.style.display = isGrok ? '' : 'none';
+    document.getElementById('group-grokweb-config').style.display = isGrokWeb ? '' : 'none';
     paidCommonGroup.style.display = (isStrict || isGrokLike) ? '' : 'none';
     // 严格版：衣着模板库；Grok/手动：人物模式 + compose + 强制衣着
     document.getElementById('group-strict-outfit-library').style.display = isStrict ? '' : 'none';
     document.getElementById('group-grok-person-mode').style.display = isGrokLike ? '' : 'none';
     document.getElementById('group-compose-prompt').style.display = isGrokLike ? '' : 'none';
     document.getElementById('group-grok-forced-outfit').style.display = isGrokLike ? '' : 'none';
-    document.getElementById('group-test-image').style.display = (isStrict || isGrok) ? '' : 'none';
+    document.getElementById('group-test-image').style.display = (isStrict || isGrok || isGrokWeb) ? '' : 'none';
   };
   imageEnabledEl.addEventListener('change', syncImageGroups);
   imageProviderEl.addEventListener('change', syncImageGroups);
@@ -402,6 +424,13 @@ export async function renderImageSettingsModal() {
           model: document.getElementById('setting-grok-model').value.trim(),
           aspectRatio: document.getElementById('setting-grok-aspect-ratio').value,
           resolution: document.getElementById('setting-grok-resolution').value,
+          prompt
+        });
+      } else if (imageProviderEl.value === 'grokweb') {
+        dataUrl = await generateGrokWebImage({
+          apiKey: document.getElementById('setting-grokweb-api-key').value.trim(),
+          baseUrl: document.getElementById('setting-grokweb-base-url').value.trim(),
+          model: document.getElementById('setting-grokweb-model').value.trim(),
           prompt
         });
       } else if (imageProviderEl.value === 'wanx') {
@@ -547,6 +576,11 @@ export async function renderImageSettingsModal() {
         composePrompt: (composeState.grokSolo.trim() === DEFAULT_GROK_COMPOSE_SYSTEM_PROMPT.trim()) ? '' : composeState.grokSolo.trim(),
         composePromptDuo: (composeState.grokDuo.trim() === DEFAULT_GROK_DUO_COMPOSE_SYSTEM_PROMPT.trim()) ? '' : composeState.grokDuo.trim(),
         outfitLibrary: grokOutfitLibraryToSave
+      },
+      grokweb: {
+        baseUrl: document.getElementById('setting-grokweb-base-url').value.trim(),
+        apiKey: document.getElementById('setting-grokweb-api-key').value.trim(),
+        model: document.getElementById('setting-grokweb-model').value.trim()
       }
     };
     await saveConfig(latestConfig);
