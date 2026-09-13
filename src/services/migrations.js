@@ -254,6 +254,21 @@ const CHAT_STEPS = [
         }
       }
     }
+  },
+  {
+    name: 'appearanceAnchors 升级为 {text, img}（锚点支持参考图）',
+    migrate(chat) {
+      const aa = chat.appearanceAnchors;
+      if (!aa || typeof aa !== 'object') return;
+      for (const [name, v] of Object.entries(aa)) {
+        if (typeof v === 'string') {
+          aa[name] = { text: v, img: '' };
+        } else if (v && typeof v === 'object') {
+          if (typeof v.text !== 'string') v.text = '';
+          if (typeof v.img !== 'string') v.img = '';
+        }
+      }
+    }
   }
 ];
 

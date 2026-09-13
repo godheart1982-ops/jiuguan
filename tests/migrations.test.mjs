@@ -144,3 +144,18 @@ test('migrateChat: 非对象输入安全返回', () => {
     migrateChat(undefined);
   });
 });
+
+test('migrateChat: appearanceAnchors 字符串升级为 {text, img}，对象形态补齐字段', () => {
+  const chat = {
+    messages: [],
+    appearanceAnchors: {
+      苏晴: '一位26岁女性，黑长直',
+      林悦: { text: '一位24岁女性' },
+      王姐: { img: 'images/c1/ch1/ref-王姐.jpg' }
+    }
+  };
+  migrateChat(chat);
+  assert.deepEqual(chat.appearanceAnchors['苏晴'], { text: '一位26岁女性，黑长直', img: '' });
+  assert.deepEqual(chat.appearanceAnchors['林悦'], { text: '一位24岁女性', img: '' });
+  assert.deepEqual(chat.appearanceAnchors['王姐'], { text: '', img: 'images/c1/ch1/ref-王姐.jpg' });
+});

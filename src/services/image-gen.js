@@ -44,7 +44,38 @@ export function imageProviderDisplayName(provider) {
 
 import { sendChat } from './api.js';
 import { resolveMemoryApi } from './api-memory.js';
-import { getConfig } from './storage.js';
+import { getConfig, getAnchorRefImageDataUrl } from './storage.js';
+
+// ---------- 外貌锚点记录（{text, img}，旧字符串形态由读档迁移升级，这里做防御兼容） ----------
+
+/** 取锚点文本（兼容旧字符串形态） */
+export function anchorTextOf(rec) {
+  return typeof rec === 'string' ? rec : String((rec && rec.text) || '');
+}
+
+/** 取锚点参考图的存储相对路径（无则空串） */
+export function anchorImgOf(rec) {
+  return (rec && typeof rec === 'object') ? String(rec.img || '') : '';
+}
+
+/** 写入/更新锚点文本：保留已登记的参考图（AI 提取只换文字，不动用户传的图） */
+export function mergeAnchorText(anchors, name, text) {
+  if (!anchors || !name) return;
+  anchors[name] = { text: String(text || ''), img: anchorImgOf(anchors[name]) };
+}
+
+/**
+ * 解析当前插图标记可用的锚点参考图（data URL 数组，null=无）。
+ * v1 仅 grokweb 通道支持参考图；锚点按名字挂——画谁就用谁的脸，没登记的没有参考图。
+ */
+export async function resolveAnchorRefImages(anchors, anchorName, config) {
+  const rawProvider = (config && config.image && config.image.provider) || '';
+  if (rawProvider !== 'grokweb') return null;
+  const imgPath = anchorImgOf(anchors && anchorName ? anchors[anchorName] : null);
+  if (!imgPath) return null;
+  const dataUrl = await getAnchorRefImageDataUrl(imgPath).catch(() => null);
+  return dataUrl ? [dataUrl] : null;
+}
 
 // ---------- 外貌身材锚点（生图人物一致性记忆，按角色名登记） ----------
 // 与插图种子档案同构：{ 角色名: 外貌描述 } 存在对话（chat.appearanceAnchors）里，记忆页可编辑。
@@ -445,16 +476,23 @@ async function generateGeminiImageViaChat({ apiKey, baseUrl, model, prompt }) {
  * 构造 grokweb（局域网自托管反代）chat/completions 生图请求体（纯函数，可单测）。
  * 反代（如 fandai）把 grok.com 网页账号包装成 OpenAI 聊天接口：发普通聊天请求，
  * 网页版出图后图片以 markdown 链接混在回复文本里（图片后出也会等齐——见反代 WS 收流逻辑）。
+ * images：可选，参考图 data URL 数组（OpenAI 多模态 image_url 部件，反代上限 4 张，超出截断）；
+ * 带参考图时指令改为"容貌以参考图为准"，文字锚点继续管身材/场景。
  */
-export function buildGrokWebChatBody(model, prompt) {
+export function buildGrokWebChatBody(model, prompt, images) {
+  const hasRef = Array.isArray(images) && images.length > 0;
+  const text = hasRef
+    ? `参考所附图片中人物的容貌特征（同一张脸、发型与神态），生成一张图片：${prompt.trim()}\n要求：直接出图，人物长相以参考图为准，身材与画面按描述执行，不要输出任何解释或询问。`
+    : `请生成一张图片：${prompt.trim()}\n要求：直接出图，画面按描述执行，不要输出任何解释或询问。`;
+  const content = hasRef
+    ? [
+        { type: 'text', text },
+        ...images.slice(0, 4).map((u) => ({ type: 'image_url', image_url: { url: u } }))
+      ]
+    : text;
   return {
     model: (model || 'grok-4.6-fast').trim(),
-    messages: [
-      {
-        role: 'user',
-        content: `请生成一张图片：${prompt.trim()}\n要求：直接出图，画面按描述执行，不要输出任何解释或询问。`
-      }
-    ],
+    messages: [{ role: 'user', content }],
     stream: false
   };
 }
@@ -469,7 +507,7 @@ export function buildGrokWebChatBody(model, prompt) {
  * @param {string} opts.model   反代模型名，默认 grok-4.6-fast
  * @param {string} opts.prompt  提示词（中文支持）
  */
-export async function generateGrokWebImage({ apiKey, baseUrl, model, prompt }) {
+export async function generateGrokWebImage({ apiKey, baseUrl, model, prompt, images }) {
   if (!apiKey) throw new Error('未配置反代 API Key（插图设置 → Grok 网页反代 中填写）');
   if (!prompt || !prompt.trim()) throw new Error('提示词为空');
   const root = (baseUrl || '').replace(/\/+$/, '');
@@ -486,7 +524,7 @@ export async function generateGrokWebImage({ apiKey, baseUrl, model, prompt }) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },
-      body: JSON.stringify(buildGrokWebChatBody(model, prompt))
+      body: JSON.stringify(buildGrokWebChatBody(model, prompt, images))
     });
   } catch (e) {
     throw new Error(`网络请求失败：${e.message || e}`);
@@ -1176,7 +1214,7 @@ function resolveImageGenerator(config) {
   }
   if (imgCfg.provider === 'grokweb') {
     const gw = imgCfg.grokweb || {};
-    return (prompt) => generateGrokWebImage({ ...gw, prompt });
+    return (prompt, images) => generateGrokWebImage({ ...gw, prompt, images });
   }
   if (imgCfg.provider === 'wanx') {
     const wx = imgCfg.wanx || {};
@@ -1368,7 +1406,9 @@ export async function generateIllustrationForReply({ replyContent, character, co
   }
 
   // ---------- Grok 管线（compose + 私密衣着库随机一行） ----------
-  const anchorText = (anchorName && anchors) ? anchors[anchorName] : '';
+  const anchorText = (anchorName && anchors) ? anchorTextOf(anchors[anchorName]) : '';
+  // grokweb 参考图：锚点带图则出图带上（画谁用谁的脸）；文字锚点继续管身材/场景
+  const refImages = await resolveAnchorRefImages(anchors, anchorName, config);
   let prompt = await composeIllustrationPrompt(replyContent, character, mergedApiConfig, !!anchorText);
   prompt = await sanitizeIllustrationPrompt(prompt, null, character, mergedApiConfig);
   const newAnchor = await extractNewAnchor(anchorName, anchors, replyContent, character, mergedApiConfig);
@@ -1385,7 +1425,7 @@ export async function generateIllustrationForReply({ replyContent, character, co
     try {
       const safePrompt = hardFilterPrompt(attemptPrompt, provider);
       const finalPrompt = safePrompt + STYLE_SUFFIX;
-      const dataUrl = await generate(finalPrompt);
+      const dataUrl = await generate(finalPrompt, refImages);
       return { dataUrl, prompt: finalPrompt, newAnchor };
     } catch (e) {
       lastErr = e;
@@ -1404,8 +1444,9 @@ export async function generateIllustrationForReply({ replyContent, character, co
 /**
  * 用户手动改词后的直接生成：不经过副 API 总结/清洗，只过 App 层硬性禁词过滤 + 追加风格后缀。
  * 若仍被审核拒绝，错误上会挂 imagePrompt（过滤后的词），方便再次编辑。
+ * refImages：可选，锚点参考图（grokweb 通道，调用方用 resolveAnchorRefImages 解析）
  */
-export async function generateIllustrationFromPrompt({ prompt, config }) {
+export async function generateIllustrationFromPrompt({ prompt, config, refImages = null }) {
   const generate = resolveImageGenerator(config);
   const rawProvider = (config.image && config.image.provider) || 'pollinations';
   const provider = rawProvider === 'manual' ? 'grok' : rawProvider;
@@ -1420,7 +1461,7 @@ export async function generateIllustrationFromPrompt({ prompt, config }) {
   if (!clean) throw new Error('提示词为空');
   const finalPrompt = clean + STYLE_SUFFIX;
   try {
-    const dataUrl = await generate(finalPrompt);
+    const dataUrl = await generate(finalPrompt, refImages);
     return { dataUrl, prompt: finalPrompt };
   } catch (e) {
     e.imagePrompt = clean;

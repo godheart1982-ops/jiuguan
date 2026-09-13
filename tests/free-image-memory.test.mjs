@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { migrateChat } from '../src/services/migrations.js';
-import { spliceAnchorIntoPollinationsUrl, buildGrokWebChatBody, isPaidImageProvider, imageProviderDisplayName } from '../src/services/image-gen.js';
+import { spliceAnchorIntoPollinationsUrl, buildGrokWebChatBody, isPaidImageProvider, imageProviderDisplayName, anchorTextOf, anchorImgOf, mergeAnchorText } from '../src/services/image-gen.js';
 
 // ---------- migrateChat: seedArchive 升级 ----------
 
@@ -67,4 +67,40 @@ test('buildGrokWebChatBody: 指定模型生效且去空白', () => {
 test('grokweb 服务商注册：isPaidImageProvider 与显示名', () => {
   assert.equal(isPaidImageProvider('grokweb'), true);
   assert.equal(imageProviderDisplayName('grokweb'), 'Grok 网页反代');
+});
+
+// ---------- 锚点 {text, img} 助手与 grokweb 多模态请求体 ----------
+
+test('anchorTextOf/anchorImgOf: 字符串与对象形态兼容', () => {
+  assert.equal(anchorTextOf('一位26岁女性'), '一位26岁女性');
+  assert.equal(anchorImgOf('一位26岁女性'), '');
+  assert.equal(anchorTextOf({ text: '一位24岁女性', img: 'images/a/b/ref-林悦.jpg' }), '一位24岁女性');
+  assert.equal(anchorImgOf({ text: '一位24岁女性', img: 'images/a/b/ref-林悦.jpg' }), 'images/a/b/ref-林悦.jpg');
+  assert.equal(anchorTextOf(null), '');
+  assert.equal(anchorImgOf(undefined), '');
+});
+
+test('mergeAnchorText: 更新文本时保留已登记参考图', () => {
+  const anchors = { 苏晴: { text: '旧锚点', img: 'images/c1/ch1/ref-苏晴.jpg' } };
+  mergeAnchorText(anchors, '苏晴', '新锚点');
+  assert.deepEqual(anchors['苏晴'], { text: '新锚点', img: 'images/c1/ch1/ref-苏晴.jpg' });
+  mergeAnchorText(anchors, '新角色', '一位20岁女性');
+  assert.deepEqual(anchors['新角色'], { text: '一位20岁女性', img: '' });
+});
+
+test('buildGrokWebChatBody: 带参考图时多模态结构+指令换"容貌以参考图为准"', () => {
+  const body = buildGrokWebChatBody('grok-4.6-fast', '竖向构图，白色衬衣', ['data:image/jpeg;base64,AAA']);
+  const content = body.messages[0].content;
+  assert.ok(Array.isArray(content));
+  assert.equal(content[0].type, 'text');
+  assert.ok(content[0].text.includes('容貌'));
+  assert.ok(content[0].text.includes('参考图'));
+  assert.deepEqual(content[1], { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AAA' } });
+});
+
+test('buildGrokWebChatBody: 参考图超 4 张截断（反代上限）', () => {
+  const imgs = ['1', '2', '3', '4', '5'].map((i) => `data:image/jpeg;base64,${i}`);
+  const body = buildGrokWebChatBody('', '猫', imgs);
+  const parts = body.messages[0].content.filter((p) => p.type === 'image_url');
+  assert.equal(parts.length, 4);
 });

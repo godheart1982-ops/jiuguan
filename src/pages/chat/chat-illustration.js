@@ -9,7 +9,9 @@ import {
   isPaidImageProvider,
   isStrictMechanicalProvider,
   imageProviderDisplayName,
-  shotWordsOf
+  shotWordsOf,
+  mergeAnchorText,
+  resolveAnchorRefImages
 } from '../../services/image-gen.js';
 import { updateGenerationForeground } from '../../services/foreground.js';
 import { openBigTextEditor } from '../../utils/big-editor.js';
@@ -98,7 +100,13 @@ export function createIllustrationController(ctx) {
     showMemoryStatus('🖼 正在用手动提示词生成插图…', 'info');
     await updateGenerationForeground({ title: '正在生成插图', text: '使用手动修改的提示词…' }).catch(() => {});
     try {
-      const { dataUrl, prompt: finalPrompt } = await generateIllustrationFromPrompt({ prompt, config: cfg });
+      const { dataUrl, prompt: finalPrompt } = await generateIllustrationFromPrompt({
+        prompt,
+        config: cfg,
+        refImages: await resolveAnchorRefImages(
+          currentChat.appearanceAnchors, (mk.alt || '').trim() || character.name, cfg
+        )
+      });
       const relPath = await saveGeneratedImage(characterId, currentChat.id, dataUrl);
       generatedImageCache.set(relPath, dataUrl);
       msg.content = msg.content.replace(mk.full, `![${mk.alt}](local-img://${relPath}?p=${encodePromptParam(finalPrompt)})`);
@@ -151,7 +159,7 @@ export function createIllustrationController(ctx) {
           ? shotWordsOf(imageUi.shotSel, imageUi.orientSel, imageUi.elevSel, imageUi.aspectSel)
           : null
       });
-      if (newAnchor) anchors[newAnchor.name] = newAnchor.anchor;
+      if (newAnchor) mergeAnchorText(anchors, newAnchor.name, newAnchor.anchor);
       const relPath = await saveGeneratedImage(characterId, currentChat.id, dataUrl);
       generatedImageCache.set(relPath, dataUrl);
       msg.content = msg.content.replace(mk.full, `![${mk.alt}](local-img://${relPath}?p=${encodePromptParam(prompt)})`);
@@ -189,7 +197,7 @@ export function createIllustrationController(ctx) {
           : null
       });
       prompt = result.prompt;
-      if (result.newAnchor) anchors[result.newAnchor.name] = result.newAnchor.anchor;
+      if (result.newAnchor) mergeAnchorText(anchors, result.newAnchor.name, result.newAnchor.anchor);
     } catch (e) {
       showMemoryStatus(`🖼 提示词总结失败：${(e && e.message) || e}`, 'error');
       return;

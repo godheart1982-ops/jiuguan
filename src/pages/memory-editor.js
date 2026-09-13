@@ -1,7 +1,7 @@
 // 记忆编辑器：🧠 全屏弹窗；页签两行（短/长/事实 | 种子/锚点）。
 // 自包含模块——自己建遮罩、绑事件、保存，输入仅 (chat, character, onUpdate)，与聊天页状态零耦合。
 // migrateMemory 也住在这里：它既被编辑器调用，也被聊天页打开旧对话时做结构迁移。
-import { saveCharacter, saveChat } from '../services/storage.js';
+import { saveCharacter, saveChat, saveAnchorRefImage, deleteAnchorRefImage, getGeneratedImageDataUrl } from '../services/storage.js';
 import {
   summarizeShortTermMemories,
   condenseLongTermMemory,
@@ -11,9 +11,28 @@ import {
   normalizeFacts,
   formatFactsMemo
 } from '../services/api-memory.js';
+import { anchorTextOf, anchorImgOf } from '../services/image-gen.js';
 import { migrateChat } from '../services/migrations.js';
 import { countTokens } from '../utils/tokenizer.js';
 import { openBigTextEditor } from '../utils/big-editor.js';
+
+// 参考图上传前压缩：最长边 ≤1024px 转 jpeg（脸特征足够，省存储省上传）
+function resizeImageDataUrl(dataUrl, maxDim = 1024) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      if (scale >= 1) return resolve(dataUrl);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -46,8 +65,14 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       ? { seed: Number.isFinite(v.seed) ? v.seed : 0, anchor: typeof v.anchor === 'string' ? v.anchor : '' }
       : { seed: v, anchor: '' }])
   );
-  // 生图外貌身材锚点档案（本地副本，保存时写回 chat.appearanceAnchors）
-  let appearanceAnchorsEdit = { ...(chat.appearanceAnchors || {}) };
+  // 生图外貌身材锚点档案（本地副本，保存时写回 chat.appearanceAnchors；{角色名: {text, img}} 形态，
+  // img = 参考图存储相对路径；migrateChat 已把旧字符串形态升级为对象，这里再做一层防御）
+  let appearanceAnchorsEdit = Object.fromEntries(
+    Object.entries(chat.appearanceAnchors || {}).map(([k, v]) => [k, {
+      text: anchorTextOf(v),
+      img: anchorImgOf(v)
+    }])
+  );
   // 对话补充设定（本地副本，保存时写回 chat.memory.supplement；常驻注入 system，仅本对话生效）
   let supplementEdit = String((chat.memory && chat.memory.supplement) || '');
   // 当前激活的记忆页签：'short' 短期 / 'long' 长期 / 'facts' 事实备忘 / 'seeds' 插图种子 / 'anchors' 外貌身材锚点 / 'supplement' 补充设定
@@ -438,20 +463,26 @@ export async function openMemoryEditor(chat, character, onUpdate) {
     }
 
     if (activeTab === 'anchors') {
-      const anchorRows = Object.entries(appearanceAnchorsEdit).map(([name, anchor]) => `
+      const anchorRows = Object.entries(appearanceAnchorsEdit).map(([name, rec]) => `
         <div class="memory-card" data-name="${escapeHtml(name)}">
           <div class="memory-card-header">
             <span style="flex: 1; font-size: 0.9rem; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(name)}</span>
             <button class="btn btn-ghost btn-small btn-expand-anchor" data-name="${escapeHtml(name)}">⛶ 展开编辑</button>
             <button class="btn btn-danger btn-small btn-delete-anchor" data-name="${escapeHtml(name)}">删除</button>
           </div>
-          <textarea class="form-textarea anchor-value-input" data-name="${escapeHtml(name)}" rows="2" placeholder="一位{N}岁女性，…">${escapeHtml(anchor)}</textarea>
+          <textarea class="form-textarea anchor-value-input" data-name="${escapeHtml(name)}" rows="2" placeholder="一位{N}岁女性，…">${escapeHtml(rec.text || '')}</textarea>
+          <div style="display: flex; align-items: center; gap: 8px; margin-top: 6px;">
+            <img class="anchor-ref-preview" data-name="${escapeHtml(name)}" ${rec.img ? `data-img="${escapeHtml(rec.img)}"` : ''} alt="" style="width: 48px; height: 48px; object-fit: cover; border-radius: 6px; background: #1c1c1f; ${rec.img ? '' : 'display: none;'}">
+            <button class="btn btn-ghost btn-small btn-upload-anchor-ref" data-name="${escapeHtml(name)}">📷 ${rec.img ? '更换参考图' : '上传参考图'}</button>
+            ${rec.img ? `<button class="btn btn-danger btn-small btn-clear-anchor-ref" data-name="${escapeHtml(name)}">清除图</button>` : ''}
+            <span style="font-size: 11px; color: #888;">有图时出图的脸以图为准（仅 Grok 网页反代通道）</span>
+          </div>
         </div>
       `).join('');
       contentEl.innerHTML = `
       <div class="memory-section">
         <div class="memory-section-title">生图外貌身材锚点档案（${Object.keys(appearanceAnchorsEdit).length}）</div>
-        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">按角色名登记的固定容貌身材描述，只用于生图（不进对话上下文）。新角色首次生图后自动从设定/状态栏提取登记，之后同名角色每张图都是同一张脸。提取不准就直接改；删掉则下次生图重新提取。锚点建议以"一位{N}岁女性"开头——画面年龄以锚点为准（想让角色显年轻就写小几岁），剧情里的年龄不影响出图。</div>
+        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">按角色名登记的固定容貌身材描述+可选参考图，只用于生图（不进对话上下文）。新角色首次生图后自动从设定/状态栏提取登记，之后同名角色每张图都是同一张脸。提取不准就直接改；删掉则下次生图重新提取。锚点建议以"一位{N}岁女性"开头——画面年龄以锚点为准（想让角色显年轻就写小几岁），剧情里的年龄不影响出图。参考图（Grok 网页反代通道）：上传后出图时一并发送，容貌以图为准、文字锚点管身材与场景。</div>
         <div class="memory-list">${anchorRows || '<div class="memory-empty">暂无锚点记录（新角色首次生图后自动登记）</div>'}</div>
         <div style="display: flex; gap: 8px; margin-top: 12px;">
           <input type="text" class="form-input" id="anchor-new-name" placeholder="角色名（与状态栏一致）" style="flex: 1;">
@@ -460,21 +491,76 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       </div>
       `;
 
+      // 参考图缩略图异步加载（显示用 file-URL/base64 均可；发送时才强制 base64）
+      contentEl.querySelectorAll('.anchor-ref-preview[data-img]').forEach((img) => {
+        getGeneratedImageDataUrl(img.dataset.img).then((u) => {
+          if (u && img.isConnected) img.src = u;
+        }).catch(() => {});
+      });
+
+      // 隐藏文件选择器：参考图上传（每次渲染重建，target 名字存在 dataset 上）
+      const refFileInput = document.createElement('input');
+      refFileInput.type = 'file';
+      refFileInput.accept = 'image/*';
+      refFileInput.style.display = 'none';
+      contentEl.appendChild(refFileInput);
+      refFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        const targetName = refFileInput.dataset.targetName;
+        refFileInput.value = '';
+        if (!file || !targetName) return;
+        try {
+          const raw = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => resolve(ev.target.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+          const resized = await resizeImageDataUrl(raw, 1024);
+          const relPath = await saveAnchorRefImage(character.id, chat.id, targetName, resized);
+          if (!appearanceAnchorsEdit[targetName]) appearanceAnchorsEdit[targetName] = { text: '', img: '' };
+          appearanceAnchorsEdit[targetName].img = relPath;
+          renderContent();
+        } catch (err) {
+          alert('参考图保存失败：' + (err && err.message ? err.message : err));
+        }
+      });
+
       contentEl.querySelectorAll('.anchor-value-input').forEach(input => {
         input.addEventListener('change', () => {
-          const v = input.value.trim();
-          if (v) {
-            appearanceAnchorsEdit[input.dataset.name] = v;
+          const name = input.dataset.name;
+          const rec = appearanceAnchorsEdit[name] || { text: '', img: '' };
+          rec.text = input.value.trim();
+          // 文本清空且有参考图时只清文字（纯图锚点合法）；都空才删整条
+          if (!rec.text && !rec.img) {
+            delete appearanceAnchorsEdit[name];
           } else {
-            // 清空等于删除（下次生图重新提取）
-            delete appearanceAnchorsEdit[input.dataset.name];
+            appearanceAnchorsEdit[name] = rec;
           }
           renderContent();
         });
       });
       contentEl.querySelectorAll('.btn-delete-anchor').forEach(btn => {
         btn.addEventListener('click', () => {
+          const rec = appearanceAnchorsEdit[btn.dataset.name];
+          if (rec && rec.img) deleteAnchorRefImage(rec.img).catch(() => {});
           delete appearanceAnchorsEdit[btn.dataset.name];
+          renderContent();
+        });
+      });
+      contentEl.querySelectorAll('.btn-upload-anchor-ref').forEach(btn => {
+        btn.addEventListener('click', () => {
+          refFileInput.dataset.targetName = btn.dataset.name;
+          refFileInput.click();
+        });
+      });
+      contentEl.querySelectorAll('.btn-clear-anchor-ref').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const rec = appearanceAnchorsEdit[btn.dataset.name];
+          if (rec && rec.img) {
+            deleteAnchorRefImage(rec.img).catch(() => {});
+            rec.img = '';
+          }
           renderContent();
         });
       });
@@ -483,15 +569,16 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         btn.addEventListener('click', () => {
           const name = btn.dataset.name;
           const textarea = contentEl.querySelector(`.anchor-value-input[data-name="${CSS.escape(name)}"]`);
+          const rec = appearanceAnchorsEdit[name] || { text: '', img: '' };
           openBigTextEditor({
             title: `「${name}」的外貌身材锚点`,
-            value: textarea ? textarea.value : (appearanceAnchorsEdit[name] || ''),
+            value: textarea ? textarea.value : rec.text,
             onSave: (text) => {
-              const v = (text || '').trim();
-              if (v) {
-                appearanceAnchorsEdit[name] = v;
-              } else {
+              rec.text = (text || '').trim();
+              if (!rec.text && !rec.img) {
                 delete appearanceAnchorsEdit[name];
+              } else {
+                appearanceAnchorsEdit[name] = rec;
               }
               renderContent();
             }
@@ -511,7 +598,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             onSave: (text) => {
               const v = (text || '').trim();
               if (!v) return;
-              appearanceAnchorsEdit[name] = v;
+              appearanceAnchorsEdit[name] = { text: v, img: '' };
               renderContent();
             }
           });
@@ -772,10 +859,12 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         if (seedOk || anchor) cleanedSeeds[name.trim()] = { seed: seedOk ? seed : 0, anchor };
       }
       chat.seedArchive = cleanedSeeds;
-      // 生图外貌身材锚点档案（过滤空描述）
+      // 生图外貌身材锚点档案（{text, img} 形态；文本与参考图任一非空即保留——纯图锚点合法）
       const cleanedAnchors = {};
-      for (const [name, anchor] of Object.entries(appearanceAnchorsEdit)) {
-        if (name.trim() && String(anchor).trim()) cleanedAnchors[name.trim()] = String(anchor).trim();
+      for (const [name, rec] of Object.entries(appearanceAnchorsEdit)) {
+        const text = String((rec && rec.text) || '').trim();
+        const img = String((rec && rec.img) || '').trim();
+        if (name.trim() && (text || img)) cleanedAnchors[name.trim()] = { text, img };
       }
       chat.appearanceAnchors = cleanedAnchors;
 

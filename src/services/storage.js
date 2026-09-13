@@ -714,6 +714,40 @@ export async function getGeneratedImageDataUrl(relPath) {
   return base64 ? `data:${mime};base64,${base64}` : null;
 }
 
+// 锚点参考图（grokweb 生图参考脸）：存 images/{角色ID}/{对话ID}/ref-{名字}.{ext}——
+// 每个名字固定一个文件名（覆盖即换图），随对话/角色删除自动清理（复用生成图目录的生命周期）
+export async function saveAnchorRefImage(characterId, chatId, name, dataUrl) {
+  const backend = await initBackend();
+  const m = /^data:image\/(jpeg|jpg|png|webp);base64,(.+)$/.exec(dataUrl || '');
+  if (!m) throw new Error('无效的图片数据');
+  const ext = m[1] === 'jpeg' ? 'jpg' : m[1];
+  const safe = String(name || 'ref').replace(/[\\/:*?"<>|\s]+/g, '_');
+  const relPath = `images/${characterId}/${chatId}/ref-${safe}.${ext}`;
+  await backend.fs.ensureDir(`images/${characterId}/${chatId}`);
+  await backend.fs.writeFileBuffer(relPath, m[2]);
+  const written = await backend.fs.exists(relPath).catch(() => false);
+  if (!written) throw new Error('图片写入本地存储失败');
+  return relPath;
+}
+
+// 读取锚点参考图：固定返回 base64 data URL（不走 file-URL——要作为 data URI 塞进反代请求体）
+export async function getAnchorRefImageDataUrl(relPath) {
+  if (!relPath) return null;
+  const backend = await initBackend();
+  const ext = relPath.split('.').pop().toLowerCase();
+  const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+    : ext === 'webp' ? 'image/webp'
+    : 'image/png';
+  const base64 = await backend.fs.readFileBuffer(relPath).catch(() => null);
+  return base64 ? `data:${mime};base64,${base64}` : null;
+}
+
+export async function deleteAnchorRefImage(relPath) {
+  if (!relPath) return;
+  const backend = await initBackend();
+  await backend.fs.deleteFile(relPath).catch(() => {});
+}
+
 // 清理某个对话（或整个角色）目录下的全部生成图
 async function deleteGeneratedImagesDir(dir) {
   const backend = await initBackend();
