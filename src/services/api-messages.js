@@ -13,6 +13,32 @@ import { formatFactsMemo, formatLongTermInjection, matchLongTermRecalls, RECALL_
 export const THINKING_PREFILL = '<思考>';
 
 /**
+ * 当前剧情阶段注入块（纯函数，可单测）。
+ * 剧情线挂在对话级（chat.plot）：{ mode: 'soft'|'hard', current: 1, stages: [{title, content, condition, branches}] }
+ * 只注入当前阶段；指针由用户掌控（记忆编辑器「剧情」页签 / 聊天页📖推进按钮），AI 不自动翻章。
+ * 铁轨模式与自由世界书互斥（页签里有提示）；引力模式可与之共存。
+ */
+export function buildPlotStageBlock(plot) {
+  if (!plot || !Array.isArray(plot.stages) || !plot.stages.length) return '';
+  const idx = Math.min(Math.max(plot.current || 1, 1), plot.stages.length);
+  const st = plot.stages[idx - 1] || {};
+  if (!String(st.title || '').trim() && !String(st.content || '').trim()) return '';
+  const modeRule = plot.mode === 'hard'
+    ? '铁轨模式【剧情优先】：当前剧情阶段优先于主控选择的自由发展——主控可以行动，但世界与NPC的反应会把事态往本阶段方向收束；允许局部偏离（绕路、延迟、付出代价），主线节点必须抵达；主控做出彻底掀桌的行为时，让他成功并承担后果，然后剧情在下一章重新对接最近的阶段。'
+    : '引力模式【选择优先】：本阶段只提供方向与氛围，不规定结果；主控的选择可以偏离甚至离开这条线，如实推演后果，禁止强行拉回；偏离后阶段保持等待，由用户决定跳到哪个阶段或废弃。';
+  let out = `【当前剧情阶段】第 ${idx} 阶段·${String(st.title || '未命名')}（共 ${plot.stages.length} 阶段；推进节奏由玩家掌控，AI 不得自动翻章）`;
+  out += `\n方向与氛围：${String(st.content || '（未填写）')}`;
+  if (String(st.condition || '').trim()) {
+    out += `\n推进条件：${String(st.condition).trim()}（条件满足也不自动翻章，等玩家触发）`;
+  }
+  if (String(st.branches || '').trim()) {
+    out += `\n支线种子：${String(st.branches).trim()}（可发展为相关事件进入事件追踪，支线服务于主线）`;
+  }
+  out += `\n${modeRule}支线围绕主线发展：可丰富、可干扰、可增加阻力，不得喧宾夺主让主线失速。`;
+  return out;
+}
+
+/**
  * 构建发送给 API 的 messages 数组
  * @param {Object} character 角色卡
  * @param {Array} historyMessages 历史消息（当前对话中）
@@ -21,6 +47,7 @@ export const THINKING_PREFILL = '<思考>';
  * @param {Object} seedArchive 插图种子档案 {角色名: 种子数}（可选）
  * @param {Object} [options]
  * @param {string} [options.webSearchRef] 本轮挂载的联网参考摘要（仅注入本次请求，不进历史）
+ * @param {Object} [options.plot] 对话级剧情线（chat.plot：{mode, current, stages}）
  */
 export async function buildMessages(character, historyMessages, userMessage, memory, seedArchive, options = {}) {
   const messages = [];
@@ -180,6 +207,12 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   const supplement = memoryOn && memory ? String(memory.supplement || '').trim() : '';
   if (supplement) {
     systemContent += '\n\n【对话补充设定】（用户对本剧情的补充与修正，仅当前对话生效；与角色卡初始设定冲突时以本区为准）\n' + supplement;
+  }
+
+  // 当前剧情阶段：对话级剧情线（记忆编辑器「剧情」页签），引力/铁轨两档；元指令轮也注入（供答题参考）
+  const plotBlock = buildPlotStageBlock(options && options.plot);
+  if (plotBlock) {
+    systemContent += '\n\n' + plotBlock;
   }
 
   // 记忆修正通道：允许主模型上报记忆矛盾（开关在「其他设置 → 生成行为」，误报多可关）

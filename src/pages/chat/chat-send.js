@@ -154,7 +154,7 @@ export function createSendController(deps) {
         userMsg.content,
         chat.memory,
         chat.seedArchive,
-        { webSearchRef: options.webSearchRef || '', metaCommand: isMeta }
+        { webSearchRef: options.webSearchRef || '', metaCommand: isMeta, plot: chat.plot || null }
       );
 
       const assistantMsg = {

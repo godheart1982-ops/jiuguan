@@ -162,6 +162,7 @@ export async function renderChat(container, characterId, chatId) {
     <div class="chat-input-wrapper">
       <textarea class="chat-input" id="chat-input" placeholder="输入消息..." rows="1"></textarea>
       <div class="chat-input-actions">
+        <button class="btn btn-ghost" id="btn-plot-advance" title="剧情推进：收束本章，推进到下一阶段（在记忆编辑器「剧情线」页签管理）">📖</button>
         <button class="btn btn-ghost" id="btn-web-search" title="联网检索（仅用输入框内容）">🔍</button>
         <button class="btn btn-primary" id="btn-send">发送</button>
         <button class="btn btn-danger hidden" id="btn-stop">停止</button>
@@ -378,6 +379,32 @@ export async function renderChat(container, characterId, chatId) {
       e.preventDefault();
       sendBtn.click();
     }
+  });
+
+  // 📖 剧情推进：指针 +1（机械），然后以"导演指令"为用户消息走正常发送流程（剧情轮：占轮次、进记忆、更新状态栏）
+  document.getElementById('btn-plot-advance').addEventListener('click', async () => {
+    if (sendController.isGenerating() || (currentChat && currentChat.generating)) {
+      showMemoryStatus('上一条回复仍在生成中，请稍候', 'info');
+      return;
+    }
+    const plot = currentChat && currentChat.plot;
+    if (!plot || !Array.isArray(plot.stages) || !plot.stages.length) {
+      showMemoryStatus('还没有剧情线——在记忆编辑器「剧情线」页签里创建或从剧情线库读取', 'info');
+      return;
+    }
+    if (!currentChat.messages || currentChat.messages.length === 0) {
+      showMemoryStatus('还没有对话历史，先发送一条消息开始吧', 'info');
+      return;
+    }
+    if ((plot.current || 1) >= plot.stages.length) {
+      showMemoryStatus(`已到最后一章「${plot.stages[plot.stages.length - 1].title || '未命名'}」——可在剧情线页签添加新阶段`, 'info');
+      return;
+    }
+    plot.current = (plot.current || 1) + 1;
+    const st = plot.stages[plot.current - 1] || {};
+    await saveChat(currentChat).catch(() => {});
+    input.value = `（导演指令：收束当前阶段的叙事，把剧情推进到第 ${plot.current} 阶段「${st.title || '未命名'}」。本阶段方向：${st.content || '（未填写）'}。过渡要自然——用场景切换、时间跳跃或事件引爆完成章节转换，禁止一句话带过（"然后他们就……"）；本轮按输出格式完整输出）`;
+    sendBtn.click();
   });
 
   sendBtn.addEventListener('click', async () => {
