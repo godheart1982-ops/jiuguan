@@ -148,6 +148,17 @@ export async function renderCharacterEdit(container, characterId) {
     </div>
 
     <div class="form-section">
+      <div class="form-section-title">剧情线（可选）</div>
+      <div class="form-hint" style="margin-bottom: 8px;">本卡的默认主剧情线——开新对话时自动复制进对话（指针从第 1 阶段开始）；玩的时候在记忆编辑器「剧情线」页签改的是副本，不动这里。留空 = 纯自由局。写法和示范见仓库《剧情卡模板.txt》。</div>
+      <div class="form-group" style="display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px;">
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;"><input type="radio" name="card-plot-mode" value="soft"> 引力（选择优先）</label>
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;"><input type="radio" name="card-plot-mode" value="hard"> 铁轨（剧情优先）</label>
+      </div>
+      <div id="card-plot-stages"></div>
+      <button class="btn btn-ghost btn-small" id="btn-card-plot-add" type="button">＋ 添加阶段</button>
+    </div>
+
+    <div class="form-section">
       <div class="form-section-title">叙事规则</div>
       <div class="form-group">
         <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: normal;">
@@ -540,6 +551,86 @@ export async function renderCharacterEdit(container, characterId) {
     }
   });
 
+  // ---------- 卡级剧情线编辑（模板；开新局复制进对话副本，指针从 1 开始） ----------
+  const cardPlotEdit = (() => {
+    const p = character.plot;
+    if (p && typeof p === 'object') {
+      return {
+        mode: p.mode === 'hard' ? 'hard' : 'soft',
+        stages: (Array.isArray(p.stages) ? p.stages : []).map((s) => ({
+          title: String((s && s.title) || ''),
+          content: String((s && s.content) || ''),
+          condition: String((s && s.condition) || ''),
+          branches: String((s && s.branches) || '')
+        }))
+      };
+    }
+    return { mode: 'soft', stages: [] };
+  })();
+
+  const cardPlotStagesEl = document.getElementById('card-plot-stages');
+  function renderCardPlotStages() {
+    cardPlotStagesEl.innerHTML = cardPlotEdit.stages.map((s, i) => `
+      <div class="memory-card" style="margin-bottom: 8px;">
+        <div class="memory-card-header">
+          <span style="flex: 1; font-size: 0.9rem; font-weight: 600;">第 ${i + 1} 阶段</span>
+          <button class="btn btn-ghost btn-small card-plot-up" data-idx="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button class="btn btn-ghost btn-small card-plot-down" data-idx="${i}" ${i === cardPlotEdit.stages.length - 1 ? 'disabled' : ''}>↓</button>
+          <button class="btn btn-danger btn-small card-plot-del" data-idx="${i}">删除</button>
+        </div>
+        <input type="text" class="form-input card-plot-title" data-idx="${i}" value="${escapeHtml(s.title)}" placeholder="阶段标题（如：破冰期）" style="margin-bottom: 6px;">
+        <textarea class="form-textarea card-plot-content" data-idx="${i}" rows="2" placeholder="方向/氛围/关键事件——写方向和节点，不写台词和结果">${escapeHtml(s.content)}</textarea>
+        <input type="text" class="form-input card-plot-condition" data-idx="${i}" value="${escapeHtml(s.condition)}" placeholder="推进条件（可空）：什么发生了算走完这阶段" style="margin-top: 6px;">
+        <input type="text" class="form-input card-plot-branches" data-idx="${i}" value="${escapeHtml(s.branches)}" placeholder="支线种子（可空）：本阶段可能长出的支线" style="margin-top: 6px;">
+      </div>`).join('');
+
+    const bind = (sel, field) => {
+      cardPlotStagesEl.querySelectorAll(sel).forEach((el) => {
+        el.addEventListener('change', () => {
+          const s = cardPlotEdit.stages[Number(el.dataset.idx)];
+          if (s) s[field] = el.value;
+        });
+      });
+    };
+    bind('.card-plot-title', 'title');
+    bind('.card-plot-content', 'content');
+    bind('.card-plot-condition', 'condition');
+    bind('.card-plot-branches', 'branches');
+    cardPlotStagesEl.querySelectorAll('.card-plot-del').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        cardPlotEdit.stages.splice(Number(btn.dataset.idx), 1);
+        renderCardPlotStages();
+      });
+    });
+    cardPlotStagesEl.querySelectorAll('.card-plot-up').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const i = Number(btn.dataset.idx);
+        if (i <= 0) return;
+        [cardPlotEdit.stages[i - 1], cardPlotEdit.stages[i]] = [cardPlotEdit.stages[i], cardPlotEdit.stages[i - 1]];
+        renderCardPlotStages();
+      });
+    });
+    cardPlotStagesEl.querySelectorAll('.card-plot-down').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const i = Number(btn.dataset.idx);
+        if (i >= cardPlotEdit.stages.length - 1) return;
+        [cardPlotEdit.stages[i], cardPlotEdit.stages[i + 1]] = [cardPlotEdit.stages[i + 1], cardPlotEdit.stages[i]];
+        renderCardPlotStages();
+      });
+    });
+  }
+  // 强度档位初始勾选
+  const cardPlotModeRadio = document.querySelector(`input[name="card-plot-mode"][value="${cardPlotEdit.mode}"]`);
+  if (cardPlotModeRadio) cardPlotModeRadio.checked = true;
+  document.querySelectorAll('input[name="card-plot-mode"]').forEach((r) => {
+    r.addEventListener('change', () => { cardPlotEdit.mode = r.value === 'hard' ? 'hard' : 'soft'; });
+  });
+  document.getElementById('btn-card-plot-add').addEventListener('click', () => {
+    cardPlotEdit.stages.push({ title: '', content: '', condition: '', branches: '' });
+    renderCardPlotStages();
+  });
+  renderCardPlotStages();
+
   // 取消
   document.getElementById('btn-cancel').addEventListener('click', () => {
     navigate('home');
@@ -573,6 +664,21 @@ export async function renderCharacterEdit(container, characterId) {
       character.creator = document.getElementById('input-creator').value.trim();
       character.tags = document.getElementById('input-tags').value.split(',').map(t => t.trim()).filter(Boolean);
       character.enableRandomNarrative = document.getElementById('input-enable-random-narrative').checked;
+
+      // 剧情线（卡级模板，开新局复制进对话副本；无有效阶段则移除）
+      const cardStagesClean = cardPlotEdit.stages
+        .map((s) => ({
+          title: String(s.title || '').trim(),
+          content: String(s.content || '').trim(),
+          condition: String(s.condition || '').trim(),
+          branches: String(s.branches || '').trim()
+        }))
+        .filter((s) => s.title || s.content);
+      if (cardStagesClean.length) {
+        character.plot = { mode: cardPlotEdit.mode === 'hard' ? 'hard' : 'soft', stages: cardStagesClean };
+      } else {
+        delete character.plot;
+      }
 
       // 世界书：设置 + 绑定库 + 本卡专属条目
       const wbDepth = parseInt(document.getElementById('input-worldbook-scan-depth').value, 10);
