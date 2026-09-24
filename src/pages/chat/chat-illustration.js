@@ -22,6 +22,7 @@ import {
   encodePromptParam,
   extractSeedreamMarkers
 } from './chat-image.js';
+import { activeSwipeIndex, readSwipeContent, writeSwipeContent } from './chat-swipes.js';
 
 export async function copyTextToClipboard(text) {
   try {
@@ -91,10 +92,17 @@ export function createIllustrationController(ctx) {
     getAbortController
   } = ctx;
 
+  function replaceMarker(msg, swipeIndex, markerText, replacement) {
+    const latest = readSwipeContent(msg, swipeIndex);
+    if (!latest.includes(markerText)) return { changed: false, visible: false };
+    return writeSwipeContent(msg, swipeIndex, latest.replace(markerText, replacement));
+  }
+
   async function generateWithCustomPrompt(msg, prompt) {
     const currentChat = getChat();
+    const swipeIndex = activeSwipeIndex(msg);
     const cfg = await getConfig().catch(() => ({}));
-    const markers = extractSeedreamMarkers(msg.content);
+    const markers = extractSeedreamMarkers(readSwipeContent(msg, swipeIndex));
     const mk = markers[0];
     if (!mk) return;
     showMemoryStatus('🖼 正在用手动提示词生成插图…', 'info');
@@ -109,12 +117,12 @@ export function createIllustrationController(ctx) {
       });
       const relPath = await saveGeneratedImage(characterId, currentChat.id, dataUrl);
       generatedImageCache.set(relPath, dataUrl);
-      msg.content = msg.content.replace(mk.full, `![${mk.alt}](local-img://${relPath}?p=${encodePromptParam(finalPrompt)})`);
+      replaceMarker(msg, swipeIndex, mk.full, `![${mk.alt}](local-img://${relPath}?p=${encodePromptParam(finalPrompt)})`);
       showMemoryStatus('🖼 插图生成完成', 'success');
     } catch (e2) {
       console.warn('seedream 手动提示词生成失败:', e2);
       const failedP = encodePromptParam((e2 && e2.imagePrompt) || prompt);
-      msg.content = msg.content.replace(mk.full, `![${mk.alt}](seedream://failed?p=${failedP})`);
+      replaceMarker(msg, swipeIndex, mk.full, `![${mk.alt}](seedream://failed?p=${failedP})`);
       showMemoryStatus(`🖼 插图生成失败：${(e2 && e2.message) || e2}`, 'error');
     }
     await saveChat(currentChat).catch(() => {});
@@ -124,19 +132,21 @@ export function createIllustrationController(ctx) {
   // 同一标记的生成中集合：后台自动生成 / 手动点击 / 失败重试并发时，后到的调用直接跳过，防重复出图
   const inFlightMarkers = new Set();
 
-  async function processSeedreamMarkers(msg) {
+  async function processSeedreamMarkers(msg, swipeIndex) {
     const currentChat = getChat();
     const cfg = await getConfig().catch(() => ({}));
-    if (!(cfg.ui && cfg.ui.imageEnabled === true)) return false;
+    if (!(cfg.ui && cfg.ui.imageEnabled === true)) return null;
     const provider = (cfg.image && cfg.image.provider) || 'pollinations';
-    if (provider === 'manual') return false;
-    if (!isPaidImageProvider(provider)) return false;
+    if (provider === 'manual') return null;
+    if (!isPaidImageProvider(provider)) return null;
+    const index = Number.isInteger(swipeIndex) ? swipeIndex : activeSwipeIndex(msg);
     const providerName = imageProviderDisplayName(provider);
-    const markers = extractSeedreamMarkers(msg.content);
-    if (markers.length === 0) return false;
+    const source = readSwipeContent(msg, index);
+    const markers = extractSeedreamMarkers(source);
+    if (markers.length === 0) return null;
     const mk = markers[0];
-    const flightKey = `${msg.timestamp || ''}::${mk.full.slice(0, 50)}`;
-    if (inFlightMarkers.has(flightKey)) return false;
+    const flightKey = `${msg.timestamp || ''}::${index}::${mk.full.slice(0, 50)}`;
+    if (inFlightMarkers.has(flightKey)) return null;
     inFlightMarkers.add(flightKey);
     const statusPhase = isStrictMechanicalProvider(provider)
       ? `锚点+衣着模板 → ${providerName}`
@@ -146,11 +156,12 @@ export function createIllustrationController(ctx) {
       text: isStrictMechanicalProvider(provider) ? '正在拼接锚点与衣着模板…' : '副 API 正在总结画面…'
     }).catch(() => {});
     showMemoryStatus(`🖼 正在生成插图（${statusPhase}）…`, 'info');
+    let wrote = { changed: false, visible: false };
     try {
       const anchors = currentChat.appearanceAnchors || (currentChat.appearanceAnchors = {});
       const anchorName = (mk.alt || '').trim() || character.name;
       const { dataUrl, prompt, newAnchor } = await generateIllustrationForReply({
-        replyContent: msg.content,
+        replyContent: source,
         character,
         config: cfg,
         anchorName,
@@ -162,23 +173,24 @@ export function createIllustrationController(ctx) {
       if (newAnchor) mergeAnchorText(anchors, newAnchor.name, newAnchor.anchor);
       const relPath = await saveGeneratedImage(characterId, currentChat.id, dataUrl);
       generatedImageCache.set(relPath, dataUrl);
-      msg.content = msg.content.replace(mk.full, `![${mk.alt}](local-img://${relPath}?p=${encodePromptParam(prompt)})`);
+      wrote = replaceMarker(msg, index, mk.full, `![${mk.alt}](local-img://${relPath}?p=${encodePromptParam(prompt)})`);
       showMemoryStatus('🖼 插图生成完成', 'success');
     } catch (e2) {
       console.warn('seedream 插图生成失败:', e2);
       const failedP = encodePromptParam((e2 && e2.imagePrompt) || '');
-      msg.content = msg.content.replace(mk.full, `![${mk.alt}](seedream://failed${failedP ? '?p=' + failedP : ''})`);
+      wrote = replaceMarker(msg, index, mk.full, `![${mk.alt}](seedream://failed${failedP ? '?p=' + failedP : ''})`);
       showMemoryStatus(`🖼 插图生成失败：${(e2 && e2.message) || e2}`, 'error');
     }
     await saveChat(currentChat).catch(() => {});
     await updateGenerationForeground({ title: '酒馆正在运行', text: '保持后台连接中…' }).catch(() => {});
     inFlightMarkers.delete(flightKey);
-    return true;
+    return wrote;
   }
 
   async function runManualCompose(msg, mk) {
     const currentChat = getChat();
-    mk = mk || extractSeedreamMarkers(msg.content)[0];
+    const swipeIndex = activeSwipeIndex(msg);
+    mk = mk || extractSeedreamMarkers(readSwipeContent(msg, swipeIndex))[0];
     if (!mk) return;
     showMemoryStatus('🖼 副 API 正在总结画面…', 'info');
     const cfg = await getConfig().catch(() => ({}));
@@ -187,7 +199,7 @@ export function createIllustrationController(ctx) {
       const anchors = currentChat.appearanceAnchors || (currentChat.appearanceAnchors = {});
       const anchorName = (mk.alt || '').trim() || character.name;
       const result = await prepareIllustrationPrompt({
-        replyContent: msg.content,
+        replyContent: readSwipeContent(msg, swipeIndex),
         character,
         config: cfg,
         anchorName,
@@ -203,7 +215,7 @@ export function createIllustrationController(ctx) {
       return;
     }
     const copied = await copyTextToClipboard(prompt);
-    msg.content = msg.content.replace(mk.full, `![${mk.alt}](seedream://manual?p=${encodePromptParam(prompt)})`);
+    replaceMarker(msg, swipeIndex, mk.full, `![${mk.alt}](seedream://manual?p=${encodePromptParam(prompt)})`);
     await saveChat(currentChat).catch(() => {});
     renderMessages(false);
     showMemoryStatus(
@@ -299,7 +311,8 @@ export function createIllustrationController(ctx) {
         const panel = manualBtn.closest('.img-manual-panel');
         const msg = panel && findMsg(panel);
         if (!msg) return;
-        const mk = extractSeedreamMarkers(msg.content).find(m => m.manual);
+        const swipeIndex = activeSwipeIndex(msg);
+        const mk = extractSeedreamMarkers(readSwipeContent(msg, swipeIndex)).find(m => m.manual);
         if (!mk) return;
         const encP = (panel && panel.dataset.imgPrompt) || mk.prompt || '';
 
@@ -320,7 +333,7 @@ export function createIllustrationController(ctx) {
             onSave: async (newText) => {
               const trimmed = (newText || '').trim();
               if (!trimmed) return;
-              msg.content = msg.content.replace(mk.full, `![${mk.alt}](seedream://manual?p=${encodePromptParam(trimmed)})`);
+              replaceMarker(msg, swipeIndex, mk.full, `![${mk.alt}](seedream://manual?p=${encodePromptParam(trimmed)})`);
               await saveChat(getChat()).catch(() => {});
               renderMessages(false);
               showMemoryStatus('提示词已更新', 'success');
@@ -344,7 +357,7 @@ export function createIllustrationController(ctx) {
             const chat = getChat();
             const relPath = await saveGeneratedImage(characterId, chat.id, dataUrl);
             generatedImageCache.set(relPath, dataUrl);
-            msg.content = msg.content.replace(mk.full, `![${mk.alt}](local-img://${relPath}${encP ? '?p=' + encP : ''})`);
+            replaceMarker(msg, swipeIndex, mk.full, `![${mk.alt}](local-img://${relPath}${encP ? '?p=' + encP : ''})`);
             await saveChat(chat).catch(() => {});
             renderMessages(false);
             showMemoryStatus('🖼 插图已插入', 'success');
@@ -395,8 +408,10 @@ export function createIllustrationController(ctx) {
         const path = (missingBtn.dataset.genPath || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const p = missingBtn.dataset.imgPrompt || '';
         const re = new RegExp(`!\\[[^\\]]*\\]\\(local-img://${path}[^)]*\\)`);
-        if (!re.test(msg.content)) return;
-        msg.content = msg.content.replace(re, `![${missingBtn.dataset.imgAlt || '插图'}](seedream://failed${p ? '?p=' + p : ''})`);
+        const swipeIndex = activeSwipeIndex(msg);
+        const latest = readSwipeContent(msg, swipeIndex);
+        if (!re.test(latest)) return;
+        writeSwipeContent(msg, swipeIndex, latest.replace(re, `![${missingBtn.dataset.imgAlt || '插图'}](seedream://failed${p ? '?p=' + p : ''})`));
         await saveChat(getChat()).catch(() => {});
         renderMessages(false);
         return;

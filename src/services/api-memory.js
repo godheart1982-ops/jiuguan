@@ -594,6 +594,32 @@ export function extractMemoryRecalls(content) {
 }
 
 /**
+ * 按当前稿正文重写 memory.pendingRecalls。
+ * 换滑动稿时调用，避免下一轮注入没被选中的那一稿。
+ * @returns {boolean} 调取清单是否变化
+ */
+export function syncPendingRecalls(memory, content) {
+  if (!memory || typeof memory !== 'object') return false;
+  const longTerm = Array.isArray(memory.longTerm) ? memory.longTerm : [];
+  const recalls = extractMemoryRecalls(content)
+    .filter(n => n >= 1 && n <= longTerm.length)
+    .slice(0, RECALL_PER_TURN_LIMIT);
+  const prev = Array.isArray(memory.pendingRecalls) ? memory.pendingRecalls : null;
+  if (recalls.length) {
+    const same = prev
+      && prev.length === recalls.length
+      && prev.every((n, i) => n === recalls[i]);
+    memory.pendingRecalls = recalls;
+    return !same;
+  }
+  if (prev) {
+    delete memory.pendingRecalls;
+    return true;
+  }
+  return false;
+}
+
+/**
  * 主控输入关键词召回：用户输入命中目录区条目的 recallKeys，返回绝对序号（1-based，命中数降序）
  * 全文区条目无需召回（已在注入）；无 recallKeys 的老条目不参与（等 ensureLongTermMeta 升级）
  */

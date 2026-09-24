@@ -3,6 +3,10 @@ import { saveChat, createUUID, toPlotPreset } from '../../services/storage.js';
 import { countTokens } from '../../utils/tokenizer.js';
 import { escapeHtml, extractThinkingForDisplay } from './chat-utils.js';
 import { renderMarkdown, renderAssistantDisplay } from './chat-markdown.js';
+import {
+  swipeCount, activeSwipeIndex, isActiveSwipeAborted, syncActiveSwipe
+} from './chat-swipes.js';
+import { syncPendingRecalls } from '../../services/api-memory.js';
 
 export async function createNewChat(character) {
   const now = new Date().toISOString();
@@ -41,7 +45,7 @@ export async function createNewChat(character) {
   return chat;
 }
 
-export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh, onUpdate, onEditResend) {
+export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh, onUpdate, onEditResend, onSwipe) {
   const wrapper = document.createElement('div');
   wrapper.className = `message ${msg.role}`;
   wrapper.dataset.timestamp = msg.timestamp;
@@ -56,16 +60,23 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
   const isUser = msg.role === 'user';
   const isLastMessage = currentChat.messages.length > 0 && currentChat.messages[currentChat.messages.length - 1] === msg;
 
-  // 操作按钮：AI 最后一条 → 刷新；用户最后一条 → 编辑并重发
+  // 操作按钮：AI 最后一条 → 滑动候选 + 刷新；用户最后一条 → 编辑并重发
   let actionsHtml = '';
   if (isAssistant && isLastMessage && onRefresh) {
-    actionsHtml = `<div class="message-actions"><button class="message-action-btn btn-refresh" title="重新生成这条回复">🔄 刷新</button></div>`;
+    const count = swipeCount(msg);
+    const swipeAt = activeSwipeIndex(msg);
+    const swipeHtml = (count > 1 && onSwipe) ? `
+      <button type="button" class="message-action-btn btn-swipe" data-dir="-1" ${swipeAt <= 0 ? 'disabled' : ''} title="上一稿">◀</button>
+      <span class="swipe-indicator">${swipeAt + 1}/${count}</span>
+      <button type="button" class="message-action-btn btn-swipe" data-dir="1" ${swipeAt >= count - 1 ? 'disabled' : ''} title="下一稿">▶</button>
+    ` : '';
+    actionsHtml = `<div class="message-actions">${swipeHtml}<button type="button" class="message-action-btn btn-refresh" title="再生成一稿，原来的会留下">🔄 刷新</button></div>`;
   } else if (isUser && isLastMessage && onEditResend) {
-    actionsHtml = `<div class="message-actions"><button class="message-action-btn btn-edit-resend" title="编辑并重发">✎ 编辑</button></div>`;
+    actionsHtml = `<div class="message-actions"><button type="button" class="message-action-btn btn-edit-resend" title="编辑并重发">✎ 编辑</button></div>`;
   }
 
-  // 中止标记：流式被手动停止或网络中断时显示
-  const abortedHtml = msg.aborted ? `<span style="font-size:0.8em; color:#888; margin-left:6px;">⚠ 已中止</span>` : '';
+  // 中止标记跟当前稿走：翻回被中止的那一稿才显示
+  const abortedHtml = isActiveSwipeAborted(msg) ? `<span style="font-size:0.8em; color:#888; margin-left:6px;">⚠ 已中止</span>` : '';
   const _disp = isAssistant ? extractThinkingForDisplay(msg.content) : { thinking: '', body: msg.content };
   const thinkingHtml = (isAssistant && _disp.thinking)
     ? `<div class="message-thinking collapsed"><button type="button" class="message-thinking-toggle">💭 思考过程（点击展开）</button><div class="message-thinking-body markdown-body">${renderMarkdown(_disp.thinking)}</div></div>`
@@ -93,7 +104,7 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
     });
   }
 
-  // 绑定刷新按钮
+  // 绑定刷新 / 左右翻稿。只挂在最后一条回复上
   if (isAssistant && isLastMessage && onRefresh) {
     const refreshBtn = wrapper.querySelector('.btn-refresh');
     if (refreshBtn) {
@@ -105,6 +116,14 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
         }
       });
     }
+    wrapper.querySelectorAll('.btn-swipe').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (btn.disabled || !onSwipe) return;
+        const index = currentChat.messages.findIndex(m => m.timestamp === msg.timestamp && m.role === 'assistant');
+        if (index !== -1) onSwipe(index, Number(btn.dataset.dir));
+      });
+    });
   }
 
   // 绑定编辑并重发按钮
@@ -211,6 +230,8 @@ export function openMessageEditor(msg, wrapper, currentChat) {
   document.getElementById('btn-save-editor').addEventListener('click', async () => {
     const newContent = textarea.value;
     msg.content = newContent;
+    syncActiveSwipe(msg);
+    if (currentChat.memory) syncPendingRecalls(currentChat.memory, msg.content);
     msg.timestamp = new Date().toISOString();
 
     const contentEl = wrapper.querySelector('.message-content');

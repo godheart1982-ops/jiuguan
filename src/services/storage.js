@@ -734,6 +734,12 @@ export async function saveGeneratedImage(characterId, chatId, dataUrl) {
   return relPath;
 }
 
+export async function deleteGeneratedImage(relPath) {
+  if (!relPath || !String(relPath).startsWith('images/')) return;
+  const backend = await initBackend();
+  await backend.fs.deleteFile(relPath).catch(() => {});
+}
+
 export async function getGeneratedImageDataUrl(relPath) {
   if (!relPath) return null;
   const backend = await initBackend();

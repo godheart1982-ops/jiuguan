@@ -8,8 +8,7 @@ import { setRequestSessionId } from '../../services/api-headers.js';
 import {
   summarizeTurn, trimAssistantForMemory, resolveMemoryApi,
   applyTurnFactsToMemory, RAW_WINDOW_TURNS,
-  extractMemoryCorrections, extractMemoryRecalls, ensureLongTermMeta,
-  RECALL_PER_TURN_LIMIT
+  extractMemoryCorrections, ensureLongTermMeta, syncPendingRecalls
 } from '../../services/api-memory.js';
 import { updateGenerationForeground } from '../../services/foreground.js';
 import { ensurePollinationsAnchors } from '../../services/image-gen.js';
@@ -18,6 +17,10 @@ import { escapeHtml, scrollToBottom, isNearBottom, extractThinkingForDisplay } f
 import { normalizePollinationsUrls, extractImageSeeds, hydrateGeneratedImages } from './chat-image.js';
 import { renderMarkdown, renderAssistantDisplay } from './chat-markdown.js';
 import { appendMessage } from './chat-message-ui.js';
+import {
+  activeSwipeIndex, syncActiveSwipe, rollbackNewSwipe,
+  markActiveSwipeAborted, readSwipeContent
+} from './chat-swipes.js';
 import {
   getAllRounds, getLeadingGreeting, getLastOutputHeading,
   extractSceneDate, maybeCondenseLongTerm
@@ -35,13 +38,14 @@ import {
  * @param {Function} deps.showMemoryRetryBar
  * @param {Function} deps.renderMessages
  * @param {Function} deps.handleRefresh 传给 appendMessage 的「刷新回复」回调
+ * @param {Function} deps.handleSwipe 传给 appendMessage 的「左右翻稿」回调
  * @param {{ processSeedreamMarkers: Function, showSeedreamLoading: Function }} deps.illustration
  */
 export function createSendController(deps) {
   const {
     getChat, character, characterId, avatarUrl, messagesContainer,
     els, showMemoryStatus, showMemoryRetryBar, renderMessages,
-    handleRefresh, illustration
+    handleRefresh, handleSwipe, illustration
   } = deps;
   const { sendBtn, stopBtn } = els;
   const { processSeedreamMarkers, showSeedreamLoading } = illustration;
@@ -154,19 +158,40 @@ export function createSendController(deps) {
         userMsg.content,
         chat.memory,
         chat.seedArchive,
-        { webSearchRef: options.webSearchRef || '', metaCommand: isMeta, plot: chat.plot || null }
+        {
+          webSearchRef: options.webSearchRef || '',
+          metaCommand: isMeta,
+          plot: chat.plot || null,
+          authorNote: chat.authorNote || null
+        }
       );
 
-      const assistantMsg = {
-        role: 'assistant',
-        content: 'AI 正在输入…',
-        timestamp: new Date().toISOString(),
-        round: userMsg.round,
-        ...(isMeta ? { meta: true } : {})
-      };
-      chat.messages.push(assistantMsg);
-      const appendResult = appendMessage(messagesContainer, assistantMsg, avatarUrl, chat, handleRefresh, renderMessages);
-      contentEl = appendResult.contentEl;
+      // 刷新：复用同一条助手消息，新字写入刚开的那一稿。普通发送才新推一条。
+      const reuse = options.reuseMessage || null;
+      let assistantMsg;
+      if (reuse) {
+        assistantMsg = reuse;
+        if (!assistantMsg.content) assistantMsg.content = 'AI 正在输入…';
+        syncActiveSwipe(assistantMsg);
+        renderMessages();
+        const node = messagesContainer.querySelector(`.message[data-timestamp="${assistantMsg.timestamp}"]`);
+        contentEl = node ? node.querySelector('.message-content') : null;
+      } else {
+        assistantMsg = {
+          role: 'assistant',
+          content: 'AI 正在输入…',
+          timestamp: new Date().toISOString(),
+          round: userMsg.round,
+          ...(isMeta ? { meta: true } : {})
+        };
+        chat.messages.push(assistantMsg);
+        const appendResult = appendMessage(
+          messagesContainer, assistantMsg, avatarUrl, chat, handleRefresh, renderMessages, null, handleSwipe
+        );
+        contentEl = appendResult.contentEl;
+      }
+      // 这一稿的下标在开写时锁定。出图写回这一稿，即使用户稍后翻到别的稿。
+      const lockedSwipe = activeSwipeIndex(assistantMsg);
       // 流式光标：生成期间消息末尾跳动 ▍，完成/出错/中止时移除（完成后的 renderMessages 重建也会清掉）
       if (contentEl) contentEl.classList.add('streaming-cursor');
       scrollToBottom(messagesContainer);
@@ -176,7 +201,8 @@ export function createSendController(deps) {
       if (config.debug?.previewBeforeSend) {
         const shouldSend = await showSendPreview(messages);
         if (!shouldSend) {
-          chat.messages.pop();
+          if (reuse) rollbackNewSwipe(assistantMsg);
+          else chat.messages.pop();
           renderMessages();
           await saveChat(chat).catch(() => {});
           finishGeneration(chat);
@@ -203,6 +229,7 @@ export function createSendController(deps) {
               assistantMsg.content = '';
             }
             assistantMsg.content += chunk;
+            syncActiveSwipe(assistantMsg);
             if (contentEl) {
               // 跟随滚底只在用户停留在底部时进行：上翻阅读即暂停跟随，回到底部自动恢复
               const follow = isNearBottom(messagesContainer);
@@ -218,6 +245,8 @@ export function createSendController(deps) {
           },
           onError: async (message) => {
             assistantMsg.content = `（生成失败：${message}）`;
+            syncActiveSwipe(assistantMsg);
+            if (!isMeta && chat.memory) syncPendingRecalls(chat.memory, assistantMsg.content);
             if (contentEl) {
               contentEl.classList.remove('streaming-cursor');
               contentEl.innerHTML = renderMarkdown(assistantMsg.content);
@@ -277,18 +306,16 @@ export function createSendController(deps) {
               }
 
               // 远期记忆调取：AI 末尾标记的「记忆调取：#N」落盘，下一轮 buildMessages 一次性注入该条全文；
-              // 本轮若无新请求则清除已消费的 pendingRecalls（一次性注入，不常驻）。元指令轮不解析
+              // 本轮若无新请求则清除已消费的 pendingRecalls（一次性注入，不常驻）。元指令轮不解析。
+              // 按当前这一稿计算；换稿时会再算一次。
               if (!isMeta && chat.memory && Array.isArray(chat.memory.longTerm)) {
-                const recalls = extractMemoryRecalls(assistantMsg.content)
-                  .filter(n => n >= 1 && n <= chat.memory.longTerm.length)
-                  .slice(0, RECALL_PER_TURN_LIMIT);
-                if (recalls.length) {
-                  chat.memory.pendingRecalls = recalls;
+                const recallsChanged = syncPendingRecalls(chat.memory, readSwipeContent(assistantMsg, lockedSwipe));
+                if (recallsChanged) {
                   await saveChat(chat).catch(() => {});
-                  showMemoryStatus('已调取远期记忆 #' + recalls.join('、#') + '（下轮生效）', 'info');
-                } else if (chat.memory.pendingRecalls) {
-                  delete chat.memory.pendingRecalls;
-                  await saveChat(chat).catch(() => {});
+                  const pending = chat.memory.pendingRecalls;
+                  if (pending && pending.length) {
+                    showMemoryStatus('已调取远期记忆 #' + pending.join('、#') + '（下轮生效）', 'info');
+                  }
                 }
               }
 
@@ -315,6 +342,8 @@ export function createSendController(deps) {
                   contentEl.innerHTML = renderMarkdown(assistantMsg.content);
                 }
               }
+              // 正文到此定稿（含补模块、锚点）。先写回这一稿，后台出图才不会写错槽。
+              syncActiveSwipe(assistantMsg);
 
               // 付费插图（seedream/grok/gemini）：检测到 seedream:// 标记则自动生成
               // 先把插图位置原地换成生成进度占位——此时标记渲染为"点击生成"按钮，不替换会误导用户、还可能被重复点击
@@ -331,11 +360,14 @@ export function createSendController(deps) {
               // 内容已落盘，下次自然渲染时图片会出现（避免重建导致正在流式的下一条回复冻结）
               if (!isManualMode) {
                 const illustrationChatId = chat.id;
+                syncActiveSwipe(assistantMsg);
+                const imageSwipe = lockedSwipe;
                 enqueueIllustrationTask(async () => {
                   const freshChat = getChat();
                   if (!freshChat || freshChat.id !== illustrationChatId) return;
-                  const changed = await processSeedreamMarkers(assistantMsg);
-                  if (!changed) return;
+                  const result = await processSeedreamMarkers(assistantMsg, imageSwipe);
+                  // 用户已经翻到别的稿时，图写在发起稿上，不改当前画面
+                  if (!result || !result.visible) return;
                   // contentEl 可能已随回复完成时的 renderMessages 重建而失效：
                   // 优先原地更新，失效则按 timestamp 找回当前 DOM 里的气泡再更新；
                   // 气泡不在当前渲染分页（用户翻到了很早的消息）就不动 DOM，内容已落盘
@@ -539,8 +571,10 @@ export function createSendController(deps) {
 
               await updateGenerationForeground({ title: 'AI 回复完成', text: '可以去查看了' });
             } else {
-              assistantMsg.aborted = true;
+              markActiveSwipeAborted(assistantMsg);
               assistantMsg.content = assistantMsg.content || '（已停止生成）';
+              syncActiveSwipe(assistantMsg);
+              if (!isMeta && chat.memory) syncPendingRecalls(chat.memory, assistantMsg.content);
               if (contentEl) {
                 contentEl.innerHTML = renderMarkdown(assistantMsg.content);
               }
@@ -555,8 +589,12 @@ export function createSendController(deps) {
     } catch (error) {
       // 如果已经有占位消息，更新为错误提示
       const lastMsg = chat.messages[chat.messages.length - 1];
-      if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === 'AI 正在输入…') {
-        lastMsg.content = `（生成失败：${error.message || String(error)}）`;
+      if (lastMsg && lastMsg.role === 'assistant' && (lastMsg.content === 'AI 正在输入…' || lastMsg === options.reuseMessage)) {
+        if (lastMsg.content === 'AI 正在输入…' || !String(lastMsg.content || '').trim()) {
+          lastMsg.content = `（生成失败：${error.message || String(error)}）`;
+        }
+        syncActiveSwipe(lastMsg);
+        if (!isMeta && chat.memory) syncPendingRecalls(chat.memory, lastMsg.content);
         renderMessages();
       } else {
         const errMsg = {

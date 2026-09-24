@@ -1,5 +1,5 @@
 import { navigate } from '../app.js';
-import { getCharacter, getAvatarDataUrl, listChats, getChat, saveChat, deleteChat, getConfig, readChatPing, deleteChatPing } from '../services/storage.js';
+import { getCharacter, getAvatarDataUrl, listChats, getChat, saveChat, deleteChat, getConfig, readChatPing, deleteChatPing, deleteGeneratedImage } from '../services/storage.js';
 import { DEFAULT_AUTO_ADVANCE_PROMPT } from '../services/narrative-rules.js';
 import { openMemoryEditor, migrateMemory } from './memory-editor.js';
 import { countTokens } from '../utils/tokenizer.js';
@@ -16,6 +16,9 @@ import { createIllustrationController } from './chat/chat-illustration.js';
 import { createMemoryStatus } from './chat/chat-memory-ui.js';
 import { createMessageListController } from './chat/chat-message-list.js';
 import { createSendController } from './chat/chat-send.js';
+import { normalizeAuthorNote } from '../services/author-note.js';
+import { beginNewSwipe, activateSwipe, discardInactiveSwipes, syncActiveSwipe, activeSwipeIndex, imagePathsLostByDiscard } from './chat/chat-swipes.js';
+import { syncPendingRecalls } from '../services/api-memory.js';
 
 
 export async function renderChat(container, characterId, chatId) {
@@ -115,6 +118,7 @@ export async function renderChat(container, characterId, chatId) {
   toolsPanel.innerHTML = `
     <div class="chat-tools-grid">
       <button class="chat-tool-btn" id="btn-memory" title="编辑长期记忆">🧠 记忆</button>
+      <button class="chat-tool-btn" id="btn-author-note" title="作者注释：不进记录，按深度插进每次请求">📝 作者注释</button>
       <button class="chat-tool-btn" id="btn-new-chat" title="新建对话">＋ 新对话</button>
       <button class="chat-tool-btn" id="btn-refresh-chat" title="刷新当前对话（重新读取最新内容）">🔄 刷新</button>
       <button class="chat-tool-btn" id="btn-reset-chat" title="重置对话">↺ 重置</button>
@@ -159,6 +163,14 @@ export async function renderChat(container, characterId, chatId) {
       </div>
       <div class="search-mount-detail hidden" id="search-mount-detail"></div>
     </div>
+    <div class="author-note-bar hidden" id="author-note-bar">
+      <div class="search-mount-header">
+        <span class="search-mount-label" id="author-note-label"></span>
+        <span class="search-mount-actions">
+          <button type="button" class="btn btn-ghost btn-small" id="btn-author-note-edit">编辑</button>
+        </span>
+      </div>
+    </div>
     <div class="chat-input-wrapper">
       <textarea class="chat-input" id="chat-input" placeholder="输入消息..." rows="1"></textarea>
       <div class="chat-input-actions">
@@ -186,6 +198,7 @@ export async function renderChat(container, characterId, chatId) {
     toolsPanel,
     onRefresh: (...args) => handleRefresh(...args),
     onEditResend: (...args) => handleEditResend(...args),
+    onSwipe: (...args) => handleSwipe(...args),
     showMemoryStatus,
     els: {
       roundJumpInput: document.getElementById('round-jump-input'),
@@ -218,6 +231,7 @@ export async function renderChat(container, characterId, chatId) {
     currentChat = fresh;
     messageList.resetPaging();
     renderMessages();
+    renderAuthorNoteBar();
     showMemoryStatus('已刷新到最新内容', 'success');
   }
 
@@ -247,6 +261,7 @@ export async function renderChat(container, characterId, chatId) {
     showMemoryRetryBar,
     renderMessages,
     handleRefresh,
+    handleSwipe,
     illustration: { processSeedreamMarkers, showSeedreamLoading }
   });
   // 本轮挂载的联网参考（仅内存；发送时注入 buildMessages，不写聊天历史/记忆）
@@ -436,6 +451,13 @@ export async function renderChat(container, characterId, chatId) {
     const webSearchRef = mountedSearch ? mountedSearch.brief : '';
     clearMountedSearch();
 
+    // 进入下一轮：上一条回复只保留当前稿，其余候选删掉
+    const tail = currentChat.messages[currentChat.messages.length - 1];
+    if (tail && tail.role === 'assistant') {
+      for (const relPath of imagePathsLostByDiscard(tail)) deleteGeneratedImage(relPath);
+      discardInactiveSwipes(tail);
+    }
+
     // 添加用户消息（meta 轮不分配轮次号，剧情轮编号保持连续）
     const userMsg = {
       role: 'user',
@@ -445,7 +467,7 @@ export async function renderChat(container, characterId, chatId) {
       ...(isMeta ? { meta: true } : {})
     };
     currentChat.messages.push(userMsg);
-    appendMessage(messagesContainer, userMsg, null, currentChat, handleRefresh, renderMessages, handleEditResend);
+    appendMessage(messagesContainer, userMsg, null, currentChat, handleRefresh, renderMessages, handleEditResend, handleSwipe);
     input.value = '';
     input.style.height = 'auto';
     updateInputCounter();
@@ -482,17 +504,43 @@ export async function renderChat(container, characterId, chatId) {
       return;
     }
 
-    if (!confirm('确定要重新生成这条回复吗？')) return;
+    if (!confirm('再生成一稿？原来的会留下，可以用 ◀ ▶ 切换。发出下一句后，没选中的稿会删掉。')) return;
 
-    // 删除该 user 消息之后的所有消息（即被刷新的旧回复）
-    currentChat.messages.splice(userIndex + 1);
-    // 最近一次回复一定还在原文窗口内、尚未进入短期记忆，因此短期记忆无需改动
+    // 不删除这条回复。最近一轮还在原文窗口内、尚未进入短期记忆。
+    // 旧正文收进候选，新稿写回同一条消息。
+    const assistantMsg = currentChat.messages[assistantIndex];
+    beginNewSwipe(assistantMsg);
+    assistantMsg.content = 'AI 正在输入…';
+    syncActiveSwipe(assistantMsg);
 
+    // 重新生成（不算新一轮，不触发短期记忆总结）。
+    // generate 一开始就会置 isGenerating，中间不能先 await，否则翻稿会写进还没锁定的新槽。
+    await sendController.generate(userIndex, { reuseMessage: assistantMsg });
+  }
+
+  async function handleSwipe(assistantIndex, dir) {
+    if (sendController.isGenerating()) {
+      alert('请等待当前生成完成后再切换');
+      return;
+    }
+    if (assistantIndex !== currentChat.messages.length - 1) return;
+    const msg = currentChat.messages[assistantIndex];
+    const next = activeSwipeIndex(msg) + dir;
+    if (!activateSwipe(msg, next)) return;
+    if (currentChat.memory) {
+      const changed = syncPendingRecalls(currentChat.memory, msg.content);
+      if (changed) {
+        const pending = currentChat.memory.pendingRecalls;
+        showMemoryStatus(
+          pending && pending.length
+            ? '已按当前稿调取远期记忆 #' + pending.join('、#') + '（下轮生效）'
+            : '已按当前稿取消记忆调取',
+          'info'
+        );
+      }
+    }
     await saveChat(currentChat);
-    renderMessages();
-
-    // 重新生成（不算新一轮，不触发短期记忆总结）
-    await sendController.generate(userIndex);
+    renderMessages(false);
   }
 
   // 编辑最后一条用户消息并重发
@@ -592,6 +640,76 @@ export async function renderChat(container, characterId, chatId) {
     await saveChat(currentChat);
     renderMessages();
   });
+
+  function renderAuthorNoteBar() {
+    const bar = document.getElementById('author-note-bar');
+    const label = document.getElementById('author-note-label');
+    if (!bar || !label) return;
+    const note = normalizeAuthorNote(currentChat.authorNote);
+    if (!note.text) {
+      bar.classList.add('hidden');
+      return;
+    }
+    const freq = note.frequency <= 0 ? '已暂停' : (note.frequency === 1 ? '每轮' : `每 ${note.frequency} 轮`);
+    label.textContent = `📝 作者注释 · 深度 ${note.depth} · ${freq} · ${note.text}`;
+    bar.classList.remove('hidden');
+  }
+
+  function openAuthorNoteEditor() {
+    const existing = document.querySelector('.author-note-overlay');
+    if (existing) existing.remove();
+    const note = normalizeAuthorNote(currentChat.authorNote);
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay author-note-overlay';
+    overlay.innerHTML = `
+      <div class="modal" style="width: 640px; max-width: 92vw;">
+        <div class="modal-header">
+          <h2>作者注释</h2>
+          <button class="btn btn-ghost btn-icon" id="btn-close-author-note">✕</button>
+        </div>
+        <div class="modal-body">
+          <textarea class="form-textarea" id="author-note-text" style="min-height: 140px; font-family: inherit;" placeholder="例如：这轮她在冷战，禁止当场和好。">${escapeHtml(note.text)}</textarea>
+          <div class="form-hint" style="margin-top:8px;">不写进聊天记录，也不进记忆。每次发送时再插进请求。不改原文的话，会按频率一直送。</div>
+          <div class="chat-tools-row" style="margin-top:12px;">
+            <span class="chat-round-bar-label">深度</span>
+            <input type="number" class="chat-round-jump-input" id="author-note-depth" min="0" max="20" value="${note.depth}">
+            <span class="chat-round-bar-label">频率</span>
+            <input type="number" class="chat-round-jump-input" id="author-note-frequency" min="0" max="50" value="${note.frequency}">
+          </div>
+          <div class="form-hint" style="margin-top:6px;">深度 0 = 放在最末尾，离本次生成最近。深度 4 = 后面还留 4 条消息。频率 1 = 每轮都送，4 = 第 4、8、12… 轮才送，0 = 暂停但保留原文。</div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="btn-clear-author-note">清空</button>
+          <button class="btn btn-primary" id="btn-save-author-note">保存</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    function closeEditor() { overlay.remove(); }
+    document.getElementById('btn-close-author-note').addEventListener('click', closeEditor);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeEditor(); });
+
+    async function saveNote(text) {
+      const depth = parseInt(document.getElementById('author-note-depth').value, 10);
+      const frequency = parseInt(document.getElementById('author-note-frequency').value, 10);
+      const saved = normalizeAuthorNote({ text, depth, frequency });
+      if (!saved.text) delete currentChat.authorNote;
+      else currentChat.authorNote = saved;
+      await saveChat(currentChat);
+      renderAuthorNoteBar();
+      closeEditor();
+    }
+
+    document.getElementById('btn-clear-author-note').addEventListener('click', () => saveNote(''));
+    document.getElementById('btn-save-author-note').addEventListener('click', () => {
+      saveNote(document.getElementById('author-note-text').value);
+    });
+  }
+
+  renderAuthorNoteBar();
+  document.getElementById('btn-author-note').addEventListener('click', openAuthorNoteEditor);
+  document.getElementById('btn-author-note-edit').addEventListener('click', openAuthorNoteEditor);
 
   // 编辑记忆
   document.getElementById('btn-memory').addEventListener('click', () => {

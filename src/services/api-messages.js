@@ -6,6 +6,7 @@ import { getConfig } from './storage.js';
 import { EVENT_SYSTEM_RULE, RANDOM_NPC_RULE, buildImmersiveActingRule } from './narrative-rules.js';
 import { isPaidImageProvider } from './image-gen.js';
 import { sanitizeHistoryIllustrationMarkers } from './illustration-markers.js';
+import { insertAuthorNote, shouldInjectAuthorNote, storyUserTurnCount } from './author-note.js';
 import { resolveWorldBookInjection } from './world-book.js';
 import { formatFactsMemo, formatLongTermInjection, matchLongTermRecalls, RECALL_PER_TURN_LIMIT } from './api-memory.js';
 
@@ -48,6 +49,7 @@ export function buildPlotStageBlock(plot) {
  * @param {Object} [options]
  * @param {string} [options.webSearchRef] 本轮挂载的联网参考摘要（仅注入本次请求，不进历史）
  * @param {Object} [options.plot] 对话级剧情线（chat.plot：{mode, current, stages}）
+ * @param {Object} [options.authorNote] 作者注释 {text, depth, frequency}。不进历史、不进记忆
  */
 export async function buildMessages(character, historyMessages, userMessage, memory, seedArchive, options = {}) {
   const messages = [];
@@ -272,6 +274,11 @@ export async function buildMessages(character, historyMessages, userMessage, mem
     role: 'user',
     content: userContent
   });
+
+  // 作者注释：元指令轮不插。插在预填充之前，深度 0 时紧挨本次生成，预填充仍是最后一条。
+  if (!metaCommand && shouldInjectAuthorNote(options.authorNote, storyUserTurnCount(historyMessages) + 1)) {
+    insertAuthorNote(messages, options.authorNote);
+  }
 
   // 思维链预填充（实验）：开关开启时在末尾追加 assistant 开头，强制模型先续写思维链再写正文
   // prefix 字段是 DeepSeek 官方前缀续写协议要求（仅最后一条 assistant 消息生效）

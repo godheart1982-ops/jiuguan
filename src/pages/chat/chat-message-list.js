@@ -14,6 +14,7 @@ const MSG_PAGE_SIZE = 50;
  * @param {HTMLElement} ctx.toolsPanel
  * @param {(i: number) => void} ctx.onRefresh
  * @param {(i: number) => void} ctx.onEditResend
+ * @param {(i: number, dir: number) => void} ctx.onSwipe
  * @param {(msg: string, type?: string) => void} ctx.showMemoryStatus
  * @param {object} ctx.els - roundJumpInput, roundJumpBtn, roundJumpTotal, searchInput, searchCount, toolsBtn
  */
@@ -25,6 +26,7 @@ export function createMessageListController(ctx) {
     toolsPanel,
     onRefresh,
     onEditResend,
+    onSwipe,
     showMemoryStatus,
     els
   } = ctx;
@@ -109,7 +111,8 @@ export function createMessageListController(ctx) {
         currentChat,
         onRefresh,
         renderMessages,
-        onEditResend
+        onEditResend,
+        onSwipe
       );
     }
     hydrateGeneratedImages(messagesContainer);

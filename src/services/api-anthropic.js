@@ -5,12 +5,11 @@
 import { sendChatStreamAuto } from './api-transport.js';
 import { buildCustomHeaders } from './api-headers.js';
 import { recordUsage } from './token-stats.js';
+import { foldExtraSystemIntoDialog } from './author-note.js';
 
 function buildAnthropicBody(messages, api, stream) {
   const systemMsg = messages.find(m => m.role === 'system');
-  const dialogMsgs = messages
-    .filter(m => m.role !== 'system' && !m.prefix)
-    .map(({ role, content }) => ({ role, content }));
+  const dialogMsgs = foldExtraSystemIntoDialog(messages);
 
   // 断点1：静态部分（角色描述+规则+格式）放 cache_control，动态记忆不缓存
   // 记忆随对话推进持续更新，若混入断点1则哈希每轮都变，导致只创建从不命中
