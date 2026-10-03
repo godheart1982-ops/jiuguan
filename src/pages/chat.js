@@ -163,14 +163,6 @@ export async function renderChat(container, characterId, chatId) {
       </div>
       <div class="search-mount-detail hidden" id="search-mount-detail"></div>
     </div>
-    <div class="author-note-bar hidden" id="author-note-bar">
-      <div class="search-mount-header">
-        <span class="search-mount-label" id="author-note-label"></span>
-        <span class="search-mount-actions">
-          <button type="button" class="btn btn-ghost btn-small" id="btn-author-note-edit">编辑</button>
-        </span>
-      </div>
-    </div>
     <div class="chat-input-wrapper">
       <textarea class="chat-input" id="chat-input" placeholder="输入消息..." rows="1"></textarea>
       <div class="chat-input-actions">
@@ -231,7 +223,6 @@ export async function renderChat(container, characterId, chatId) {
     currentChat = fresh;
     messageList.resetPaging();
     renderMessages();
-    renderAuthorNoteBar();
     showMemoryStatus('已刷新到最新内容', 'success');
   }
 
@@ -641,20 +632,6 @@ export async function renderChat(container, characterId, chatId) {
     renderMessages();
   });
 
-  function renderAuthorNoteBar() {
-    const bar = document.getElementById('author-note-bar');
-    const label = document.getElementById('author-note-label');
-    if (!bar || !label) return;
-    const note = normalizeAuthorNote(currentChat.authorNote);
-    if (!note.text) {
-      bar.classList.add('hidden');
-      return;
-    }
-    const freq = note.frequency <= 0 ? '已暂停' : (note.frequency === 1 ? '每轮' : `每 ${note.frequency} 轮`);
-    label.textContent = `📝 作者注释 · 深度 ${note.depth} · ${freq} · ${note.text}`;
-    bar.classList.remove('hidden');
-  }
-
   function openAuthorNoteEditor() {
     const existing = document.querySelector('.author-note-overlay');
     if (existing) existing.remove();
@@ -697,7 +674,6 @@ export async function renderChat(container, characterId, chatId) {
       if (!saved.text) delete currentChat.authorNote;
       else currentChat.authorNote = saved;
       await saveChat(currentChat);
-      renderAuthorNoteBar();
       closeEditor();
     }
 
@@ -707,9 +683,7 @@ export async function renderChat(container, characterId, chatId) {
     });
   }
 
-  renderAuthorNoteBar();
   document.getElementById('btn-author-note').addEventListener('click', openAuthorNoteEditor);
-  document.getElementById('btn-author-note-edit').addEventListener('click', openAuthorNoteEditor);
 
   // 编辑记忆
   document.getElementById('btn-memory').addEventListener('click', () => {
