@@ -4,13 +4,14 @@ import { buildImmersiveActingRule, IMMERSIVE_ACTING_RULE } from '../src/services
 
 // ---------- buildImmersiveActingRule ----------
 
-test('buildImmersiveActingRule: 默认全开——四条全在且与 IMMERSIVE_ACTING_RULE 等价', () => {
+test('buildImmersiveActingRule: 默认全开——五条全在且与 IMMERSIVE_ACTING_RULE 等价', () => {
   const rule = buildImmersiveActingRule();
   assert.equal(rule, IMMERSIVE_ACTING_RULE);
   assert.ok(rule.includes('1. 边界：不写主控'));
   assert.ok(rule.includes('2. 演出来，不解释'));
   assert.ok(rule.includes('3. 拥抱非理性'));
   assert.ok(rule.includes('4. 质感与节奏'));
+  assert.ok(rule.includes('5. 内在生活：写出活人'));
 });
 
 test('buildImmersiveActingRule: 总开关关闭返回空串', () => {
@@ -22,7 +23,8 @@ test('buildImmersiveActingRule: 子开关全关返回空串（整段不注入）
     immersiveBoundary: false,
     immersiveShowDontTell: false,
     immersiveIrrational: false,
-    immersiveTexture: false
+    immersiveTexture: false,
+    immersiveInnerLife: false
   }), '');
 });
 
@@ -32,7 +34,8 @@ test('buildImmersiveActingRule: 只留部分条目时序号重排不留空号', 
   assert.ok(!rule.includes('质感与节奏'));
   assert.ok(rule.includes('1. 演出来，不解释')); // 原第2条重排为1
   assert.ok(rule.includes('2. 拥抱非理性')); // 原第3条重排为2
-  assert.ok(!rule.includes('3.'));
+  assert.ok(rule.includes('3. 内在生活：写出活人')); // 原第5条重排为3
+  assert.ok(!rule.includes('4.'));
 });
 
 test('buildImmersiveActingRule: 子开关裁剪不影响头部角色声明；单开一条也成立', () => {
@@ -42,8 +45,25 @@ test('buildImmersiveActingRule: 子开关裁剪不影响头部角色声明；单
   const only = buildImmersiveActingRule({
     immersiveBoundary: false,
     immersiveShowDontTell: false,
-    immersiveTexture: false
+    immersiveTexture: false,
+    immersiveInnerLife: false
   });
   assert.ok(only.includes('1. 拥抱非理性'));
   assert.ok(!only.includes('2.'));
+});
+
+test('buildImmersiveActingRule: 内在生活可单独关闭，其余四条序号不受影响', () => {
+  const rule = buildImmersiveActingRule({ immersiveInnerLife: false });
+  assert.ok(!rule.includes('内在生活'));
+  assert.ok(!rule.includes('落笔先代入'));
+  assert.ok(rule.includes('4. 质感与节奏'));
+  assert.ok(!rule.includes('5.'));
+});
+
+test('buildImmersiveActingRule: 内在生活默认开启，含代入/误判条款；质感条含金句不批发', () => {
+  const rule = buildImmersiveActingRule();
+  assert.ok(rule.includes('落笔先代入'));
+  assert.ok(rule.includes('允许误判'));
+  assert.ok(rule.includes('情绪惯性'));
+  assert.ok(rule.includes('金句不批发'));
 });

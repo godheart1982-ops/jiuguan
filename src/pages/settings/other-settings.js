@@ -86,9 +86,13 @@ export async function renderOtherSettingsModal() {
             </label>
             <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
               <input type="checkbox" id="setting-immersive-texture" ${behavior.immersiveTexture !== false ? 'checked' : ''}>
-              <span>质感与节奏（防客服腔/防结尾反问）</span>
+              <span>质感与节奏（防客服腔/防结尾反问/防金句批发）</span>
             </label>
-            <div class="form-hint">总则的四条子规则，默认全开，仅在总开关开启时生效。按模型病灶微调：如某模型爱说教可只保留「拥抱非理性」，全部关闭则整段不注入。</div>
+            <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="setting-immersive-innerlife" ${behavior.immersiveInnerLife !== false ? 'checked' : ''}>
+              <span>内在生活（落笔先代入/允许误判/情绪惯性/对白交锋）</span>
+            </label>
+            <div class="form-hint">总则的五条子规则，默认全开，仅在总开关开启时生效。按模型病灶微调：如某模型爱说教可只保留「拥抱非理性」，全部关闭则整段不注入。</div>
           </div>
           <div class="form-group">
             <label class="form-label">空发送推演指令</label>
@@ -228,7 +232,8 @@ export async function renderOtherSettingsModal() {
       immersiveBoundary: document.getElementById('setting-immersive-boundary').checked,
       immersiveShowDontTell: document.getElementById('setting-immersive-showdonttell').checked,
       immersiveIrrational: document.getElementById('setting-immersive-irrational').checked,
-      immersiveTexture: document.getElementById('setting-immersive-texture').checked
+      immersiveTexture: document.getElementById('setting-immersive-texture').checked,
+      immersiveInnerLife: document.getElementById('setting-immersive-innerlife').checked
     };
     // WebDAV（坚果云）
     const prevWebdav = normalizeWebdavConfig(latestConfig.webdav);
