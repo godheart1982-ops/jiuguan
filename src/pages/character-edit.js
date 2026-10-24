@@ -640,6 +640,7 @@ export async function renderCharacterEdit(container, characterId) {
       <div class="memory-card" style="margin-bottom: 8px;">
         <div class="memory-card-header">
           <span style="flex: 1; font-size: 0.9rem; font-weight: 600;">角色 ${i + 1}${i === 0 ? '（主角）' : ''}</span>
+          <button class="btn btn-ghost btn-small role-module-expand" data-idx="${i}" type="button">⛶ 展开编辑</button>
           <button class="btn btn-danger btn-small role-module-del" data-idx="${i}" type="button">删除</button>
         </div>
         <textarea class="form-textarea role-module-content" data-idx="${i}" rows="5" placeholder="这个角色的完整设定：一句话核心、基础信息、声音与台词样本、习惯怪癖、矛盾反差、情景反应、人际关系与好感推进规则等。">${escapeHtml(text)}</textarea>
@@ -653,6 +654,20 @@ export async function renderCharacterEdit(container, characterId) {
       btn.addEventListener('click', () => {
         roleModuleEdit.splice(Number(btn.dataset.idx), 1);
         renderRoleModules();
+      });
+    });
+    roleModuleListEl.querySelectorAll('.role-module-expand').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const i = Number(btn.dataset.idx);
+        openBigTextEditor({
+          title: `角色 ${i + 1}${i === 0 ? '（主角）' : ''} 设定`,
+          value: roleModuleEdit[i],
+          placeholder: '这个角色的完整设定：一句话核心、基础信息、声音与台词样本、习惯怪癖、矛盾反差、情景反应、人际关系与好感推进规则等。',
+          onSave: (newValue) => {
+            roleModuleEdit[i] = newValue;
+            renderRoleModules();
+          }
+        });
       });
     });
   }
