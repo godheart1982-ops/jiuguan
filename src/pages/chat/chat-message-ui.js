@@ -45,7 +45,7 @@ export async function createNewChat(character) {
   return chat;
 }
 
-export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh, onUpdate, onEditResend, onSwipe) {
+export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh, onUpdate, onEditResend, onSwipe, onBranch) {
   const wrapper = document.createElement('div');
   wrapper.className = `message ${msg.role}`;
   wrapper.dataset.timestamp = msg.timestamp;
@@ -150,6 +150,13 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
         label: '复制原文',
         action: () => navigator.clipboard.writeText(msg.content)
       },
+      ...(onBranch ? [{
+        label: '从这里分支',
+        action: () => {
+          const index = currentChat.messages.findIndex(m => m.timestamp === msg.timestamp && m.role === msg.role);
+          if (index !== -1) onBranch(index);
+        }
+      }] : []),
       {
         label: '删除消息',
         action: async () => {

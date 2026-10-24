@@ -1,5 +1,6 @@
 import { navigate } from '../app.js';
-import { getCharacter, getAvatarDataUrl, listChats, getChat, saveChat, deleteChat, getConfig, readChatPing, deleteChatPing, deleteGeneratedImage } from '../services/storage.js';
+import { getCharacter, getAvatarDataUrl, listChats, getChat, saveChat, deleteChat, getConfig, readChatPing, deleteChatPing, deleteGeneratedImage, createUUID } from '../services/storage.js';
+import { buildBranchedChat } from '../services/chat-branch.js';
 import { DEFAULT_AUTO_ADVANCE_PROMPT } from '../services/narrative-rules.js';
 import { openMemoryEditor, migrateMemory } from './memory-editor.js';
 import { countTokens } from '../utils/tokenizer.js';
@@ -191,6 +192,7 @@ export async function renderChat(container, characterId, chatId) {
     onRefresh: (...args) => handleRefresh(...args),
     onEditResend: (...args) => handleEditResend(...args),
     onSwipe: (...args) => handleSwipe(...args),
+    onBranch: (...args) => handleBranch(...args),
     showMemoryStatus,
     els: {
       roundJumpInput: document.getElementById('round-jump-input'),
@@ -458,7 +460,7 @@ export async function renderChat(container, characterId, chatId) {
       ...(isMeta ? { meta: true } : {})
     };
     currentChat.messages.push(userMsg);
-    appendMessage(messagesContainer, userMsg, null, currentChat, handleRefresh, renderMessages, handleEditResend, handleSwipe);
+    appendMessage(messagesContainer, userMsg, null, currentChat, handleRefresh, renderMessages, handleEditResend, handleSwipe, handleBranch);
     input.value = '';
     input.style.height = 'auto';
     updateInputCounter();
@@ -507,6 +509,18 @@ export async function renderChat(container, characterId, chatId) {
     // 重新生成（不算新一轮，不触发短期记忆总结）。
     // generate 一开始就会置 isGenerating，中间不能先 await，否则翻稿会写进还没锁定的新槽。
     await sendController.generate(userIndex, { reuseMessage: assistantMsg });
+  }
+
+  // 对话分支：该条及之前的消息 + 全部记忆快照复制成新对话并跳过去，原线原样保留
+  async function handleBranch(index) {
+    if (sendController.isGenerating()) {
+      alert('请等待当前生成完成后再分支');
+      return;
+    }
+    if (!confirm('从这条消息开新对话？新对话包含该条及之前的全部消息与记忆快照，当前对话不受影响。')) return;
+    const branched = buildBranchedChat(currentChat, index, await createUUID(), new Date().toISOString());
+    await saveChat(branched);
+    navigate('chat', { characterId: currentChat.characterId, chatId: branched.id });
   }
 
   async function handleSwipe(assistantIndex, dir) {

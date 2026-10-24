@@ -135,7 +135,7 @@ export async function renderCharacterEdit(container, characterId) {
         <button class="btn btn-ghost btn-small" id="btn-edit-thinking-format">⛶ 展开编辑</button>
       </div>
       <textarea class="form-textarea" id="input-thinking-format" placeholder="填写思维链要求，例如：先在 <思考></思考> 标签内分析当前局势、角色心理与走向，再开始正文。">${escapeHtml(character.thinkingFormat || '')}</textarea>
-      <div class="form-hint">选填。仅当「设置 → 思考链输出」开关打开时，才会拼进 system prompt（放在输出格式之前）。给不需要思维链的模型可在设置里关闭。</div>
+      <div class="form-hint">选填。仅当「设置 → 思考链输出」开关打开时，才会拼进 system prompt（放在输出格式之前）。给不需要思维链的模型可在设置里关闭。留空 = 继承侧边栏「提示词库」的全局默认思维链。</div>
     </div>
 
     <div class="form-group">
@@ -144,7 +144,15 @@ export async function renderCharacterEdit(container, characterId) {
         <button class="btn btn-ghost btn-small" id="btn-edit-output-format">⛶ 展开编辑</button>
       </div>
       <textarea class="form-textarea" id="input-output-format" placeholder="在这里填写你期望的 AI 回复格式，例如状态栏、行动选项、正文结构等要求。支持 Markdown。">${escapeHtml(character.outputFormat)}</textarea>
-      <div class="form-hint">选填。填写后，系统会自动把它追加到角色设定后面，作为 AI 回复格式的强制约束。</div>
+      <div class="form-hint">选填。填写后，系统会自动把它追加到角色设定后面，作为 AI 回复格式的强制约束。留空 = 继承侧边栏「提示词库」的全局默认输出格式。</div>
+    </div>
+
+    <div class="form-group">
+      <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: normal;">
+        <input type="checkbox" id="input-no-global-prompts" ${character.noGlobalPrompts ? 'checked' : ''}>
+        本卡不继承全局输出格式/思维链
+      </label>
+      <div class="form-hint">勾选后，卡内留空即不注入（适合制卡助手等不需要剧情格式的特殊卡）；卡内填写的内容始终优先于全局默认。</div>
     </div>
 
     <div class="form-section">
@@ -705,6 +713,7 @@ export async function renderCharacterEdit(container, characterId) {
       character.subCharacters = normalizeSubCharacters(subCharacterEdit);
       character.thinkingFormat = document.getElementById('input-thinking-format').value.trim();
       character.outputFormat = document.getElementById('input-output-format').value.trim();
+      character.noGlobalPrompts = document.getElementById('input-no-global-prompts').checked;
       character.mainControl = {
         name: document.getElementById('input-main-control-name').value.trim(),
         description: document.getElementById('input-main-control-description').value.trim()

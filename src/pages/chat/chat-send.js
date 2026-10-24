@@ -3,6 +3,7 @@
 
 import { getConfig, saveChat, writeChatPing, deleteChatPing } from '../../services/storage.js';
 import { THINKING_PREFILL, buildMessages } from '../../services/api-messages.js';
+import { resolveCardPrompt } from '../../services/prompt-library.js';
 import { sendChat, sendChatStream } from '../../services/api.js';
 import { setRequestSessionId } from '../../services/api-headers.js';
 import {
@@ -273,7 +274,7 @@ export function createSendController(deps) {
 
               // 检查是否漏掉了输出格式最后一个模块，若开启自动补全则自动补全（元指令轮无格式，跳过）
               const config = await getConfig();
-              const lastHeading = getLastOutputHeading(character.outputFormat);
+              const lastHeading = getLastOutputHeading(resolveCardPrompt(character, config, 'outputFormat'));
               if (!isMeta && config.behavior?.autoCompleteLastModule && lastHeading && !assistantMsg.content.includes('>### ' + lastHeading)) {
                 try {
                   await updateGenerationForeground({ title: 'AI 回复不完整', text: '正在补全缺失模块…' });

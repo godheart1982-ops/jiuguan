@@ -1,0 +1,37 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { ensurePromptLibrary, findPromptContent, resolveCardPrompt, PROMPT_PRESET_SEED } from '../src/services/prompt-library.js';
+
+test('ensurePromptLibrary: 首次播种全部内置模板与默认结构；二次调用幂等', () => {
+  const config = {};
+  assert.equal(ensurePromptLibrary(config), true);
+  assert.equal(config.promptLibrary.length, PROMPT_PRESET_SEED.length);
+  assert.deepEqual(config.promptDefaults, { outputFormatId: '', thinkingFormatId: '' });
+  assert.equal(ensurePromptLibrary(config), false);
+});
+
+test('ensurePromptLibrary: 老库缺新内置模板自动补回，已有条目内容不动', () => {
+  const config = { promptLibrary: [{ id: 'statusbar', name: '状态栏输出格式', content: '我改过的版本' }] };
+  ensurePromptLibrary(config);
+  assert.equal(config.promptLibrary.length, PROMPT_PRESET_SEED.length);
+  assert.equal(config.promptLibrary.find((i) => i.id === 'statusbar').content, '我改过的版本');
+});
+
+test('resolveCardPrompt: 卡级填写覆盖全局默认', () => {
+  const config = { promptLibrary: [{ id: 'a', content: '全局格式' }], promptDefaults: { outputFormatId: 'a', thinkingFormatId: '' } };
+  assert.equal(resolveCardPrompt({ outputFormat: '卡自己的' }, config, 'outputFormat'), '卡自己的');
+});
+
+test('resolveCardPrompt: 留空继承全局；noGlobalPrompts 不注入；无默认为空', () => {
+  const config = { promptLibrary: [{ id: 'a', content: '全局格式' }], promptDefaults: { outputFormatId: 'a', thinkingFormatId: '' } };
+  assert.equal(resolveCardPrompt({}, config, 'outputFormat'), '全局格式');
+  assert.equal(resolveCardPrompt({ noGlobalPrompts: true }, config, 'outputFormat'), '');
+  assert.equal(resolveCardPrompt({}, config, 'thinkingFormat'), '');
+  assert.equal(resolveCardPrompt({}, {}, 'outputFormat'), '');
+});
+
+test('resolveCardPrompt: 全局指向已删除条目时回退空串', () => {
+  const config = { promptLibrary: [], promptDefaults: { outputFormatId: 'gone', thinkingFormatId: '' } };
+  assert.equal(resolveCardPrompt({}, config, 'outputFormat'), '');
+  assert.equal(findPromptContent(config, 'gone'), '');
+});

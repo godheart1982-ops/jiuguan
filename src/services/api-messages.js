@@ -9,6 +9,7 @@ import { sanitizeHistoryIllustrationMarkers } from './illustration-markers.js';
 import { insertAuthorNote, shouldInjectAuthorNote, storyUserTurnCount } from './author-note.js';
 import { resolveWorldBookInjection } from './world-book.js';
 import { assembleCardDescription } from './card-modules.js';
+import { resolveCardPrompt } from './prompt-library.js';
 import { formatFactsMemo, formatLongTermInjection, matchLongTermRecalls, RECALL_PER_TURN_LIMIT } from './api-memory.js';
 
 // 思维链预填充文本：开启后追加为 messages 最后一条 assistant 消息，强制模型从此处续写
@@ -91,19 +92,22 @@ export async function buildMessages(character, historyMessages, userMessage, mem
     systemContent += '\n\n【叙事规则：随机 NPC 生成】\n' + RANDOM_NPC_RULE;
   }
 
-  // 思考链输出：全局开关打开且本卡填了思考格式时，作为独立段落放在输出格式之前
-  if (thinkingOn && character.thinkingFormat && !metaCommand) {
-    systemContent += '\n\n【思考过程】\n回复正文之前，你必须先按以下要求输出思考过程：\n\n' + character.thinkingFormat;
+  // 思考链输出：全局开关打开且本卡有思考格式时，作为独立段落放在输出格式之前
+  // 输出格式/思维链来源：卡级填写覆盖，留空继承提示词库全局默认（noGlobalPrompts 卡留空即不注入）
+  const resolvedThinkingFormat = resolveCardPrompt(character, config, 'thinkingFormat');
+  const resolvedOutputFormat = resolveCardPrompt(character, config, 'outputFormat');
+  if (thinkingOn && resolvedThinkingFormat && !metaCommand) {
+    systemContent += '\n\n【思考过程】\n回复正文之前，你必须先按以下要求输出思考过程：\n\n' + resolvedThinkingFormat;
   }
 
-  if (character.outputFormat && !metaCommand) {
-    systemContent += '\n\n【输出格式要求】\n你必须严格按照以下 Markdown 格式回复：\n\n' + character.outputFormat;
+  if (resolvedOutputFormat && !metaCommand) {
+    systemContent += '\n\n【输出格式要求】\n你必须严格按照以下 Markdown 格式回复：\n\n' + resolvedOutputFormat;
 
     // 自动提取输出格式里的 >### 标题，生成模块顺序清单
     const headings = [];
     const headingRegex = /^>###\s*(.+)$/gm;
     let match;
-    while ((match = headingRegex.exec(character.outputFormat)) !== null) {
+    while ((match = headingRegex.exec(resolvedOutputFormat)) !== null) {
       headings.push(match[1].trim());
     }
 

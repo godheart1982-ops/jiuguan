@@ -2,6 +2,7 @@ import { renderHome } from './pages/home.js';
 import { renderCharacterEdit } from './pages/character-edit.js';
 import { renderChat } from './pages/chat.js';
 import { renderWorldBookManager } from './pages/world-book-manager.js';
+import { renderPromptLibrary } from './pages/prompt-library.js';
 import { renderApiSettingsModal, renderOtherSettingsModal, renderImageSettingsModal, applyFontSize } from './pages/settings.js';
 import { renderTokenStatsModal } from './pages/token-stats.js';
 import { listCharacters, getAvatarDataUrl, getConfig, saveConfig } from './services/storage.js';
@@ -187,6 +188,9 @@ function render() {
     case 'worldbooks':
       renderWorldBookManager(mainContent);
       break;
+    case 'prompts':
+      renderPromptLibrary(mainContent);
+      break;
     default:
       renderHome(mainContent);
   }
@@ -199,6 +203,11 @@ document.getElementById('btn-new-character').addEventListener('click', () => {
 
 document.getElementById('btn-worldbooks').addEventListener('click', () => {
   navigate('worldbooks');
+  closeMobileSidebar();
+});
+
+document.getElementById('btn-prompt-library').addEventListener('click', () => {
+  navigate('prompts');
   closeMobileSidebar();
 });
 

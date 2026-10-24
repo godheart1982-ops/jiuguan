@@ -27,6 +27,7 @@ export function createMessageListController(ctx) {
     onRefresh,
     onEditResend,
     onSwipe,
+    onBranch,
     showMemoryStatus,
     els
   } = ctx;
@@ -112,7 +113,8 @@ export function createMessageListController(ctx) {
         onRefresh,
         renderMessages,
         onEditResend,
-        onSwipe
+        onSwipe,
+        onBranch
       );
     }
     hydrateGeneratedImages(messagesContainer);
