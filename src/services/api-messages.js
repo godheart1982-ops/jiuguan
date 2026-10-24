@@ -8,6 +8,7 @@ import { isPaidImageProvider } from './image-gen.js';
 import { sanitizeHistoryIllustrationMarkers } from './illustration-markers.js';
 import { insertAuthorNote, shouldInjectAuthorNote, storyUserTurnCount } from './author-note.js';
 import { resolveWorldBookInjection } from './world-book.js';
+import { assembleCardDescription } from './card-modules.js';
 import { formatFactsMemo, formatLongTermInjection, matchLongTermRecalls, RECALL_PER_TURN_LIMIT } from './api-memory.js';
 
 // 思维链预填充文本：开启后追加为 messages 最后一条 assistant 消息，强制模型从此处续写
@@ -66,8 +67,8 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   // 开原生思考时，忽略提示词版 <思考>（避免真思考 + 假装思考重复）
   const thinkingOn = !!(cfgApi.enableThinking === true) && !nativeThinking;
 
-  // System prompt：角色描述 + 主控信息 + 长期记忆 + 输出格式约束
-  let systemContent = character.description || '';
+  // System prompt：卡内模块（背景→主角→配角）+ 主控信息 + 长期记忆 + 输出格式约束
+  let systemContent = assembleCardDescription(character);
 
   if (character.mainControl && (character.mainControl.name || character.mainControl.description)) {
     systemContent += '\n\n【主控信息】';

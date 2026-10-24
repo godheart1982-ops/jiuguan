@@ -3,6 +3,7 @@ import { getCharacter, saveCharacter, saveAvatar, getAvatarDataUrl, createUUID, 
 import { attachCharCounter } from '../utils/counter.js';
 import { openBigTextEditor } from '../utils/big-editor.js';
 import { normalizeWorldBookSettings, createEmptyWorldBookEntry } from '../services/world-book.js';
+import { normalizeSubCharacters } from '../services/card-modules.js';
 
 export async function renderCharacterEdit(container, characterId) {
   container.innerHTML = '';
@@ -13,6 +14,8 @@ export async function renderCharacterEdit(container, characterId) {
     name: '',
     avatar: '',
     description: '',
+    background: '',
+    subCharacters: [],
     greeting: '',
     thinkingFormat: '',
     outputFormat: '',
@@ -111,6 +114,19 @@ export async function renderCharacterEdit(container, characterId) {
       </div>
       <textarea class="form-textarea" id="input-description" placeholder="描述角色的性格、背景、说话方式等。可以写入系统提示词。">${escapeHtml(character.description)}</textarea>
       <div class="form-hint">这部分会作为 system message 发送给 AI。</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">背景设定（卡内模块）</label>
+      <textarea class="form-textarea" id="input-background" placeholder="世界观、社会规则、故事舞台等背景信息；不写具体角色人设。">${escapeHtml(character.background || '')}</textarea>
+      <div class="form-hint">选填。注入时位于主角设定之前；世界观集中写这里，避免和角色描述重复。</div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">配角模块（可选）</div>
+      <div class="form-hint" style="margin-bottom: 8px;">每个配角一块设定，姓名直接写在设定文本里；剧情里出现的重要新角色随时添加，下一轮请求即带上完整人格。全部模块每轮常驻注入（顺序：背景设定 → 主角 → 配角），精简写法见仓库《配角卡模板.txt》。</div>
+      <div id="sub-character-list"></div>
+      <button class="btn btn-ghost btn-small" id="btn-sub-char-add" type="button">＋ 添加配角</button>
     </div>
 
     <div class="form-group">
@@ -631,6 +647,36 @@ export async function renderCharacterEdit(container, characterId) {
   });
   renderCardPlotStages();
 
+  // ---------- 配角模块编辑（每个配角一块设定文本，姓名写在文本里；change 时回写，删空块在保存时过滤） ----------
+  const subCharacterEdit = normalizeSubCharacters(character.subCharacters);
+  const subCharListEl = document.getElementById('sub-character-list');
+  function renderSubCharacters() {
+    subCharListEl.innerHTML = subCharacterEdit.map((text, i) => `
+      <div class="memory-card" style="margin-bottom: 8px;">
+        <div class="memory-card-header">
+          <span style="flex: 1; font-size: 0.9rem; font-weight: 600;">配角 ${i + 1}</span>
+          <button class="btn btn-danger btn-small sub-char-del" data-idx="${i}" type="button">删除</button>
+        </div>
+        <textarea class="form-textarea sub-char-content" data-idx="${i}" rows="5" placeholder="配角的完整设定：一句话核心、基础信息、声音与台词样本、习惯怪癖、矛盾反差、情景反应、与主角的关系与好感推进规则等。">${escapeHtml(text)}</textarea>
+      </div>`).join('');
+    subCharListEl.querySelectorAll('.sub-char-content').forEach((el) => {
+      el.addEventListener('change', () => {
+        subCharacterEdit[Number(el.dataset.idx)] = el.value;
+      });
+    });
+    subCharListEl.querySelectorAll('.sub-char-del').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        subCharacterEdit.splice(Number(btn.dataset.idx), 1);
+        renderSubCharacters();
+      });
+    });
+  }
+  document.getElementById('btn-sub-char-add').addEventListener('click', () => {
+    subCharacterEdit.push('');
+    renderSubCharacters();
+  });
+  renderSubCharacters();
+
   // 取消
   document.getElementById('btn-cancel').addEventListener('click', () => {
     navigate('home');
@@ -655,6 +701,8 @@ export async function renderCharacterEdit(container, characterId) {
       character.group = document.getElementById('input-group').value.trim();
       character.greeting = document.getElementById('input-greeting').value.trim();
       character.description = description;
+      character.background = document.getElementById('input-background').value.trim();
+      character.subCharacters = normalizeSubCharacters(subCharacterEdit);
       character.thinkingFormat = document.getElementById('input-thinking-format').value.trim();
       character.outputFormat = document.getElementById('input-output-format').value.trim();
       character.mainControl = {
