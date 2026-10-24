@@ -14,6 +14,16 @@ export function ensurePromptLibrary(config) {
     config.promptLibrary = [];
     changed = true;
   }
+  // 内置条目由种子定义：不在种子里的非自定义条目 = 已下线内置（如早期误收的做卡模板），
+  // 自动移除并解除全局引用；自定义条目一律保留
+  const seedIds = new Set(PROMPT_PRESET_SEED.map((s) => s.id));
+  const removedIds = config.promptLibrary
+    .filter((it) => it && it.custom !== true && !seedIds.has(it.id))
+    .map((it) => it.id);
+  if (removedIds.length) {
+    config.promptLibrary = config.promptLibrary.filter((it) => it && (it.custom === true || seedIds.has(it.id)));
+    changed = true;
+  }
   for (const seed of PROMPT_PRESET_SEED) {
     if (!config.promptLibrary.some((it) => it && it.id === seed.id)) {
       config.promptLibrary.push({ ...seed });
@@ -22,6 +32,14 @@ export function ensurePromptLibrary(config) {
   }
   if (!config.promptDefaults || typeof config.promptDefaults !== 'object') {
     config.promptDefaults = { outputFormatId: '', thinkingFormatId: '' };
+    changed = true;
+  }
+  if (removedIds.includes(config.promptDefaults.outputFormatId)) {
+    config.promptDefaults.outputFormatId = '';
+    changed = true;
+  }
+  if (removedIds.includes(config.promptDefaults.thinkingFormatId)) {
+    config.promptDefaults.thinkingFormatId = '';
     changed = true;
   }
   return changed;

@@ -35,3 +35,18 @@ test('resolveCardPrompt: 全局指向已删除条目时回退空串', () => {
   assert.equal(resolveCardPrompt({}, config, 'outputFormat'), '');
   assert.equal(findPromptContent(config, 'gone'), '');
 });
+
+test('ensurePromptLibrary: 下线内置条目自动清除并解除全局引用，自定义保留', () => {
+  const config = {
+    promptLibrary: [
+      { id: 'character', name: '角色卡模板', content: '做卡用' },
+      { id: 'custom-1', name: '我的格式', content: 'x', custom: true },
+      { id: 'statusbar', content: '状态栏' }
+    ],
+    promptDefaults: { outputFormatId: 'character', thinkingFormatId: '' }
+  };
+  ensurePromptLibrary(config);
+  assert.ok(!config.promptLibrary.some((i) => i.id === 'character'));
+  assert.ok(config.promptLibrary.some((i) => i.id === 'custom-1'));
+  assert.equal(config.promptDefaults.outputFormatId, '');
+});

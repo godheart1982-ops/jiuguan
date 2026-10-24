@@ -4,14 +4,8 @@ const fs = require('fs');
 const path = require('path');
 
 const PRESETS = [
-  { id: 'character', name: '角色卡模板', file: '角色卡模板.txt' },
-  { id: 'sub-character', name: '配角卡模板', file: '配角卡模板.txt' },
-  { id: 'city', name: '都市卡模板', file: '都市卡模板.txt' },
   { id: 'statusbar', name: '状态栏输出格式', file: '状态栏输出格式-v2.txt' },
-  { id: 'thinking', name: '思维链模板', file: '思维链模板.txt' },
-  { id: 'worldbook', name: '世界书规则包', file: '世界书规则包.txt' },
-  { id: 'wenfeng', name: '文风规则包', file: '文风规则包.txt' },
-  { id: 'plot', name: '剧情卡模板', file: '剧情卡模板.txt' }
+  { id: 'thinking', name: '思维链模板', file: '思维链模板.txt' }
 ];
 
 const items = PRESETS.map((p) => ({
