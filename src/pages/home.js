@@ -1,5 +1,6 @@
 import { navigate, refreshCharacters, state, toggleGroupCollapsed } from '../app.js';
 import { getAvatarDataUrl, deleteCharacter } from '../services/storage.js';
+import { getCharacterModules } from '../services/card-modules.js';
 
 const DEFAULT_GROUP = '未分组';
 
@@ -91,7 +92,8 @@ async function createCharacterCard(char) {
 
   const avatarUrl = char.avatarDataUrl || await getAvatarDataUrl(char.avatar) || defaultAvatarUrl();
 
-  const desc = char.description ? char.description.slice(0, 80) + (char.description.length > 80 ? '...' : '') : '暂无描述';
+  const firstModule = getCharacterModules(char)[0] || '';
+  const desc = firstModule ? firstModule.slice(0, 80) + (firstModule.length > 80 ? '...' : '') : '暂无描述';
 
   card.innerHTML = `
     <img class="card-cover" src="${avatarUrl}" alt="${char.name}">

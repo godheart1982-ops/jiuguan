@@ -45,7 +45,7 @@ export function imageProviderDisplayName(provider) {
 import { sendChat } from './api.js';
 import { resolveMemoryApi } from './api-memory.js';
 import { getConfig, getAnchorRefImageDataUrl } from './storage.js';
-import { normalizeSubCharacters } from './card-modules.js';
+import { getCharacterModules } from './card-modules.js';
 
 // ---------- 外貌锚点记录（{text, img}，旧字符串形态由读档迁移升级，这里做防御兼容） ----------
 
@@ -83,16 +83,13 @@ export async function resolveAnchorRefImages(anchors, anchorName, config) {
 // 名字取自插图标记的 alt（AI 按输出格式写的就是状态栏里的她）；新名字首次生图后自动提取登记，
 // 之后同名角色生图逐字注入锚点，保证同一个 NPC 每张图都是同一张脸。不进对话上下文，只占生图管线。
 
-// 为指定名字提取外貌身材锚点：容貌身材优先取设定原文（女主=角色卡设定，NPC=卡内配角模块/回复里的人物卡/设定段），
+// 为指定名字提取外貌身材锚点：容貌身材优先取设定原文（卡内角色模块 / 回复里的人物卡、设定段），
 // 设定里没有才退到状态栏的样貌/身材字段。只在首次登记时调用一次。
 export async function extractNamedAppearanceAnchor({ name, replyContent, character, apiConfig, english = false }) {
-  const isHeroine = name && character && name === character.name;
-  // 设定来源：女主读角色卡全文（一次性调用，不省这几千 token，长卡也要读全）；
-  // NPC 读卡内配角模块（老卡无模块则为空串，退到回复正文/状态栏，行为同旧版），
-  // 正文里随机 NPC 的人物卡和状态栏照旧一起给；提取 prompt 已限定只取「name」一人
-  const charDesc = isHeroine
-    ? (character.description || '').slice(0, 30000)
-    : normalizeSubCharacters(character && character.subCharacters).join('\n\n').slice(0, 30000);
+  // 设定来源：卡内全部角色模块（主角配角都在，提取 prompt 已限定只取「name」一人，长卡也读全）；
+  // 老卡的 description/subCharacters 由 getCharacterModules 惰性并入；
+  // 正文里随机 NPC 的人物卡和状态栏照旧一起给
+  const charDesc = getCharacterModules(character).join('\n\n').slice(0, 30000);
   const system = english
     ? 'You are an appearance extraction assistant for text-to-image models. From the given materials, extract the appearance and figure of the female character named 「' + name + '」, and output ONE English description of at most 60 words, used to keep her look consistent across generated images.\n' +
       'Source priority [strict]: prefer the original setting text (character card / profile sections in the reply); only when settings lack details, use the status-bar appearance fields.\n' +
@@ -1139,8 +1136,8 @@ export const DEFAULT_GROK_DUO_COMPOSE_SYSTEM_PROMPT = DEFAULT_GROK_COMPOSE_SYSTE
 // 第一步：根据角色卡 + 本轮回复，总结出生图提示词
 // suppressAppearance：该角色已登记锚点时为 true——禁止副 AI 写容貌/身材（锚点事后由 App 机械拼接）
 async function composeIllustrationPrompt(replyContent, character, apiConfig, suppressAppearance) {
-  // 主角描述 + 卡内配角模块（给配角生图时设定也在场；背景模块与生图外貌无关，不带入以免挤占截断配额）
-  const charDesc = ((character.description || '') + '\n\n' + normalizeSubCharacters(character.subCharacters).join('\n\n')).slice(0, 4000);
+  // 卡内全部角色模块（给任何角色生图时设定都在场；背景模块与生图外貌无关，不带入以免挤占截断配额）
+  const charDesc = getCharacterModules(character).join('\n\n').slice(0, 4000);
   // 允许用户在设置中自定义 compose system prompt；未设置时按服务商（与人物模式）用对应内置默认
   const defaultPrompt = apiConfig.imageProvider === 'grok'
     ? (apiConfig.duoMode ? DEFAULT_GROK_DUO_COMPOSE_SYSTEM_PROMPT : DEFAULT_GROK_COMPOSE_SYSTEM_PROMPT)
