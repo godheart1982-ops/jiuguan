@@ -278,6 +278,13 @@ export function formatFactsMemo(factsRaw, mcName) {
       lines.push(`· ${r.from} → ${r.to}${r.note ? '：' + r.note : ''}`);
     });
   }
+  if (facts.worldEvents.length) {
+    if (lines.length) lines.push('');
+    lines.push('世界动态（公共事件与重要NPC的场外个人线；相关NPC重新出场或事件被涉及时须承接最新进展，禁止与已发生剧情冲突；标「完结」的仅作历史参考、不再推进）：');
+    facts.worldEvents.forEach((w) => {
+      lines.push(`· ${w.text}`);
+    });
+  }
   if (facts.intel.length) {
     if (lines.length) lines.push('');
     lines.push('知情约束【硬性】：写某角色的对话/心声/动机时，仅可使用 knownBy 含该角色名、或含「公开」的情报；禁止使用其不在名单中的情报。');
@@ -437,6 +444,15 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, co
     ? `\n当前知情情报清单（intel 字段需逐条核对）：\n${intelList.map((it, i) => `${i + 1}. 「${it.text}」可知：${(it.knownBy || []).join('、') || '（暂无）'}`).join('\n')}\n`
     : '';
 
+  // 当前世界动态清单：公共事件与NPC场外线——worldEvents 是增量上报（App 按事件名合并），
+  // 给 AI 当前清单是为了阶段衔接与事件名一致（同名更新，而不是另起新条）
+  const worldList = Array.isArray(context.currentWorldEvents)
+    ? context.currentWorldEvents.map((w) => String((w && (typeof w === 'object' ? w.text : w)) || '').trim()).filter(Boolean)
+    : [];
+  const worldNote = worldList.length
+    ? `\n当前世界动态清单（公共事件与NPC场外线；worldEvents 字段只报有变化的条目，没变的不用输出）：\n${worldList.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n`
+    : '';
+
   const prompt = `
 请根据以下当轮对话，生成短期记忆摘要，并抽取硬事实清单（强制检查下列项，没有则空数组）。约定/关系/知情常一起变化：有泄密或隐瞒时必须在 intel 中体现。
 
@@ -452,7 +468,8 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, co
   "mood":"主要人物的情绪或态度转折，没有则留空",
   "promises":[{"text":"未完成或新产生的具体约定/承诺","status":"open或done"}],
   "relations":[{"from":"人物全名","to":"人物全名或「主控」","note":"身份关系+可选状态词，≤15字；指向主控的边须附进度数值段"}],
-  "intel":[{"text":"一条情报/秘密的简短陈述","knownBy":["可知此人的名字","主控"]}]
+  "intel":[{"text":"一条情报/秘密的简短陈述","knownBy":["可知此人的名字","主控"]}],
+  "worldEvents":[{"text":"公共事件或NPC姓名→最新阶段/近况"}]
 }
 3. date 必须使用：${date}
 4. 【指代铁律】所有人名一律写具体名字，禁止使用「她/他/对方/有人」指代——这条记忆会脱离上下文被单独阅读。
@@ -475,7 +492,9 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, co
 8. intel【强制检查·全量重写】：输出本轮之后的**完整知情情报清单**——从上方「当前知情情报清单」逐条核对：没变的情报**原样照抄**（text 与 knownBy 都不许改）；知情范围有变化的，text 照抄并给出**当前**全量 knownBy（刚得知的人必须加入，仍应保密的人不得加入）；新出现的情报追加。knownBy 用角色名，全员公开可用「公开」。清单为空且本轮无新情报时输出 []。不要编造。
    记录门槛【三道闸，缺一不可】：①秘密性——有人刻意隐瞒或知情范围明显受限；双方共同经历的普通事件不记（在场者自然知道，无需追踪）；②会制约演绎——「某人不知道这件事」必须会影响他后续的言行（出轨的痕迹、未公开的裁员名单、瞒着主控的检查结果）；③有泄露路径——存在被不该知道的人撞破或透露的可能。公开信息、共同经历、无保密价值的日常一律不记。
    照抄例外：不符合三道闸的旧情报直接移除（视为自然淘汰）。
-${contextNote}${prevNote}${supplementNote}${correctionNote}${openNote}${relNote}${intelNote}
+9. worldEvents【强制检查·增量上报】：记录公共事件与重要NPC的场外个人线的**变化**——只报本轮有新进展/新产生的条目，没变的旧条目不必输出（App 按事件名自动合并，同名保留最新，没报的条目原样保留）；格式"事件名或NPC姓名→最新阶段/近况"（公共事件用 发酵/升级/平息/完结；NPC场外线用简短近况，如「林静→相亲失败，情绪低落」）。
+   来源：本轮 AI 回复状态栏的「公共事件/相关事件/事件追踪/场外动态」及正文中明确发生的场外事件；正文没有发生的不要编造。已完结的标「完结」保留，不要删除旧条目。
+${contextNote}${prevNote}${supplementNote}${correctionNote}${openNote}${relNote}${intelNote}${worldNote}
 当轮对话：
 用户：${sanitizeHistoryIllustrationMarkers(userContent)}
 

@@ -212,7 +212,7 @@ test('formatFactsMemo: 已完成的约定不注入', () => {
   assert.equal(memo, '');
 });
 
-test('formatFactsMemo: 分区齐全且含硬性知情约束；worldEvents 已废弃不注入', () => {
+test('formatFactsMemo: 分区齐全且含硬性知情约束；worldEvents 回流注入', () => {
   const memo = formatFactsMemo({
     promises: [{ text: '周五去看展', status: 'open' }],
     relations: [{ from: '艾莉娅', to: '主控', note: '同事' }],
@@ -226,8 +226,11 @@ test('formatFactsMemo: 分区齐全且含硬性知情约束；worldEvents 已废
   assert.ok(memo.startsWith('【事实备忘】'));
   assert.ok(memo.includes('1. 周五去看展'));
   assert.ok(memo.includes('· 艾莉娅 → 主控：同事'));
-  // worldEvents 已废弃（与状态栏事件追踪重复）：即使旧数据仍存，也不再注入
-  assert.ok(!memo.includes('裁员评审'));
+  // 世界动态回流：场外动态与世界事件随事实备忘注入，附重逢承接/禁冲突指引
+  assert.ok(memo.includes('世界动态'));
+  assert.ok(memo.includes('· 裁员评审→发酵'));
+  assert.ok(memo.includes('承接'));
+  assert.ok(memo.includes('完结'));
   assert.ok(memo.includes('知情约束【硬性】'));
   assert.ok(memo.includes('· 「主控已婚」可知：主控'));
   assert.ok(memo.includes('· 「公司要裁员」可知：公开'));
@@ -449,4 +452,23 @@ test('normalizeFacts/applyTurnFacts: 主控端点归一化——「主控」映�
   applyTurnFactsToMemory(memory, { relations: [{ from: '艾莉娅', to: '李明', note: '同事' }] }, '李明');
   applyTurnFactsToMemory(memory, { relations: [{ from: '艾莉娅', to: '主控', note: '恋人' }] }, '李明');
   assert.deepEqual(memory.facts.relations, [{ from: '艾莉娅', to: '李明', note: '恋人' }]);
+});
+
+test('applyTurnFactsToMemory: 世界动态按事件名合并——同名保留最新阶段，未报的条目原样保留', () => {
+  const memory = { facts: emptyFacts() };
+  applyTurnFactsToMemory(memory, { worldEvents: [{ text: '裁员评审→发酵' }, { text: '林静→相亲中' }] });
+  assert.deepEqual(memory.facts.worldEvents.map((w) => w.text), ['裁员评审→发酵', '林静→相亲中']);
+  applyTurnFactsToMemory(memory, { worldEvents: [{ text: '裁员评审→完结' }] });
+  assert.deepEqual(memory.facts.worldEvents.map((w) => w.text), ['裁员评审→完结', '林静→相亲中']);
+  applyTurnFactsToMemory(memory, { worldEvents: [] });
+  assert.equal(memory.facts.worldEvents.length, 2);
+});
+
+test('applyTurnFactsToMemory: 世界动态超过上限丢最旧', () => {
+  const memory = { facts: emptyFacts() };
+  for (let i = 1; i <= 20; i++) {
+    applyTurnFactsToMemory(memory, { worldEvents: [{ text: `事件${i}→发酵` }] });
+  }
+  assert.equal(memory.facts.worldEvents.length, 15);
+  assert.equal(memory.facts.worldEvents[0].text, '事件6→发酵');
 });

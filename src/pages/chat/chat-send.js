@@ -409,6 +409,7 @@ export function createSendController(deps) {
                 // 摘要上下文：人名参照 + 最近两条短期摘要（指代消解用；随 catch-up 推进自动滚动）
                 // + 记忆修正行（从当轮回复【全文】机械提取——裁切后的总结文本可能已丢掉末尾修正行）
                 // + 约定/关系/情报当前清单（全量重写：AI 拿着旧清单逐条核对，对齐文本后整体替换）
+                // + 世界动态当前清单（增量上报：AI 只报有变化的条目，App 按事件名合并、同名保留最新）
                 const memoryContext = (assistantFullContent) => ({
                   characterName: character.name || '',
                   mainControlName: (character.mainControl && character.mainControl.name) || '',
@@ -417,7 +418,8 @@ export function createSendController(deps) {
                   corrections: extractMemoryCorrections(assistantFullContent || ''),
                   openPromises: (((chat.memory.facts || {}).promises) || []).filter(p => p && p.status !== 'done'),
                   currentRelations: (((chat.memory.facts || {}).relations) || []),
-                  currentIntel: (((chat.memory.facts || {}).intel) || [])
+                  currentIntel: (((chat.memory.facts || {}).intel) || []),
+                  currentWorldEvents: (((chat.memory.facts || {}).worldEvents) || [])
                 });
                 // meta 指令轮不参与总结：过滤后再做窗口/补总结计算，保证轮次与窗口都是纯剧情轮
                 const allRounds = getAllRounds(chat.messages).filter(r => !r.user.meta);

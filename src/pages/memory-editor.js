@@ -204,6 +204,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   function factsCount() {
     return (factsEdit.promises?.length || 0)
       + (factsEdit.relations?.length || 0)
+      + (factsEdit.worldEvents?.length || 0)
       + (factsEdit.intel?.length || 0);
   }
 
@@ -465,6 +466,13 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         </div>
       `).join('');
 
+      const worldRows = (factsEdit.worldEvents || []).map((w, index) => `
+        <div class="memory-card" style="display:flex; gap:8px; align-items:center;">
+          <input type="text" class="form-input fact-world-text" data-index="${index}" value="${escapeHtml(w.text || '')}" placeholder="事件名或NPC姓名→阶段/近况（如：林静→相亲失败，情绪低落）" style="flex:1;">
+          <button class="btn btn-danger btn-small btn-del-world" data-index="${index}">删除</button>
+        </div>
+      `).join('');
+
       contentEl.innerHTML = `
       <div class="memory-section">
         <div class="memory-section-title">事实备忘</div>
@@ -477,6 +485,12 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         <div class="memory-section-title" style="font-size:0.95rem;">人物关系（${factsEdit.relations.length}）</div>
         <div class="memory-list">${relationRows || '<div class="memory-empty">暂无关系记录</div>'}</div>
         <button class="btn btn-ghost btn-small" id="btn-add-rel" style="margin:8px 0 16px;">＋ 添加关系</button>
+        <div class="memory-section-title" style="font-size:0.95rem;">世界动态（${(factsEdit.worldEvents || []).length}）</div>
+        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">
+          公共事件与重要NPC的场外个人线（格式"事件名或NPC姓名→阶段/近况"）。按事件名合并、同名保留最新；随【事实备忘】注入，NPC重新出场时AI须承接；标「完结」的仅作历史参考。
+        </div>
+        <div class="memory-list">${worldRows || '<div class="memory-empty">暂无世界动态</div>'}</div>
+        <button class="btn btn-ghost btn-small" id="btn-add-world" style="margin:8px 0 16px;">＋ 添加动态</button>
         <div class="memory-section-title" style="font-size:0.95rem;">知情情报（${(factsEdit.intel || []).length}）</div>
         <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">
           每条情报 + knownBy（谁可当已知；全员可用「公开」）。与约定/关系常一起变。注入时生成硬性知情约束。
@@ -535,6 +549,24 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       });
       contentEl.querySelector('#btn-add-rel')?.addEventListener('click', () => {
         factsEdit.relations.push({ from: '', to: '主控', note: '' });
+        renderContent();
+      });
+
+      contentEl.querySelectorAll('.fact-world-text').forEach((input) => {
+        input.addEventListener('change', () => {
+          const i = parseInt(input.dataset.index, 10);
+          if (factsEdit.worldEvents[i]) factsEdit.worldEvents[i].text = input.value.trim();
+        });
+      });
+      contentEl.querySelectorAll('.btn-del-world').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          factsEdit.worldEvents.splice(parseInt(btn.dataset.index, 10), 1);
+          renderContent();
+        });
+      });
+      contentEl.querySelector('#btn-add-world')?.addEventListener('click', () => {
+        if (!Array.isArray(factsEdit.worldEvents)) factsEdit.worldEvents = [];
+        factsEdit.worldEvents.push({ text: '' });
         renderContent();
       });
 
