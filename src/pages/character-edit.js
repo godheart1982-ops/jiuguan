@@ -121,7 +121,7 @@ export async function renderCharacterEdit(container, characterId) {
 
     <div class="form-group">
       <label class="form-label">场外动态角色（可选）</label>
-      <input class="form-input" id="input-offscreen-roles" type="text" placeholder="人名顿号分隔，如：林静、苏晴" value="${escapeHtml((character.offscreenRoles || []).join('、'))}">
+      <input class="form-input" id="input-offscreen-roles" type="text" placeholder="人名用空格/逗号/顿号分隔，如：林静 苏晴" value="${escapeHtml((character.offscreenRoles || []).join('、'))}">
       <div class="form-hint">只有名单内的角色会生成场外个人线（不在场也自行行动、发生事件，随记忆回流）；留空 = 由 AI 自行判断重要NPC。名单外的角色不编场外戏，只出现在当下场景。</div>
     </div>
 
@@ -713,7 +713,7 @@ export async function renderCharacterEdit(container, characterId) {
       delete character.description;
       delete character.subCharacters;
       character.offscreenRoles = document.getElementById('input-offscreen-roles').value
-        .split(/[,，、;；]/).map((s) => s.trim()).filter(Boolean);
+        .split(/[,，、;；\s]+/).map((s) => s.trim()).filter(Boolean);
       character.thinkingFormat = document.getElementById('input-thinking-format').value.trim();
       character.outputFormat = document.getElementById('input-output-format').value.trim();
       character.noGlobalPrompts = document.getElementById('input-no-global-prompts').checked;
