@@ -8,7 +8,7 @@ import { isPaidImageProvider } from './image-gen.js';
 import { sanitizeHistoryIllustrationMarkers } from './illustration-markers.js';
 import { insertAuthorNote, shouldInjectAuthorNote, storyUserTurnCount } from './author-note.js';
 import { resolveWorldBookInjection } from './world-book.js';
-import { assembleCardDescription } from './card-modules.js';
+import { assembleCardDescription, buildOffscreenRosterBlock } from './card-modules.js';
 import { resolveCardPrompt } from './prompt-library.js';
 import { formatFactsMemo, formatLongTermInjection, matchLongTermRecalls, RECALL_PER_TURN_LIMIT } from './api-memory.js';
 
@@ -79,6 +79,12 @@ export async function buildMessages(character, historyMessages, userMessage, mem
     if (character.mainControl.description) {
       systemContent += '\n' + character.mainControl.description;
     }
+  }
+
+  // 场外动态角色名单（卡级）：非空时只有名单内角色拥有场外个人线，静态文本可进缓存
+  const offscreenRoster = buildOffscreenRosterBlock(character);
+  if (offscreenRoster) {
+    systemContent += '\n\n' + offscreenRoster;
   }
 
   // 世界书：角色专属 + 绑定库；常驻/关键词/递归；设定后注入（主控信息之后）
