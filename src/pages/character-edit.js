@@ -55,23 +55,12 @@ export async function renderCharacterEdit(container, characterId) {
   let worldBookEdit = normalizeWorldBookSettings(character.worldBook);
   const allWorldBooks = await listWorldBooks().catch(() => []);
 
-  // 模板下拉：提示词库（输出格式/思维链按卡选择加载，不再有全局默认）
+  // 模板下拉配置与选项文本（DOM 填充在表单挂载之后进行）
   const promptConfig = await getConfig();
   ensurePromptLibrary(promptConfig);
   const presetOptions = ['<option value="">无（不注入）</option>']
     .concat(promptConfig.promptLibrary.map((it) => `<option value="${escapeHtml(it.id)}">${escapeHtml(it.name)}</option>`))
     .join('');
-  document.getElementById('input-thinking-preset').innerHTML = presetOptions;
-  document.getElementById('input-output-preset').innerHTML = presetOptions;
-  // 预选：新版 presetId 优先（含显式"无"）；老卡留空且未禁用全局时预选旧全局默认，保存后即固化到卡上
-  const legacyThinking = (!character.noGlobalPrompts && !(character.thinkingFormat || '').trim())
-    ? (promptConfig.promptDefaults.thinkingFormatId || '') : '';
-  const legacyOutput = (!character.noGlobalPrompts && !(character.outputFormat || '').trim())
-    ? (promptConfig.promptDefaults.outputFormatId || '') : '';
-  document.getElementById('input-thinking-preset').value =
-    character.thinkingPresetId !== undefined ? character.thinkingPresetId : legacyThinking;
-  document.getElementById('input-output-preset').value =
-    character.outputFormatPresetId !== undefined ? character.outputFormatPresetId : legacyOutput;
 
   let avatarDataUrl = character.avatar ? await getAvatarDataUrl(character.avatar) : null;
   let pendingAvatarBase64 = null;
@@ -270,6 +259,19 @@ export async function renderCharacterEdit(container, characterId) {
   `;
   layout.appendChild(form);
   container.appendChild(layout);
+
+  // 模板下拉：填充选项与预选（必须在表单挂载后执行，否则 select 不存在）
+  document.getElementById('input-thinking-preset').innerHTML = presetOptions;
+  document.getElementById('input-output-preset').innerHTML = presetOptions;
+  // 预选：新版 presetId 优先（含显式"无"）；老卡留空且未禁用全局时预选旧全局默认，保存后即固化到卡上
+  const legacyThinking = (!character.noGlobalPrompts && !(character.thinkingFormat || '').trim())
+    ? (promptConfig.promptDefaults.thinkingFormatId || '') : '';
+  const legacyOutput = (!character.noGlobalPrompts && !(character.outputFormat || '').trim())
+    ? (promptConfig.promptDefaults.outputFormatId || '') : '';
+  document.getElementById('input-thinking-preset').value =
+    character.thinkingPresetId !== undefined ? character.thinkingPresetId : legacyThinking;
+  document.getElementById('input-output-preset').value =
+    character.outputFormatPresetId !== undefined ? character.outputFormatPresetId : legacyOutput;
 
   // ---------- 世界书：绑定库 + 本卡条目 ----------
   document.getElementById('btn-goto-worldbook-lib').addEventListener('click', () => {
