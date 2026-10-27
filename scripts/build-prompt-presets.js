@@ -4,8 +4,9 @@ const fs = require('fs');
 const path = require('path');
 
 const PRESETS = [
-  { id: 'statusbar', name: '状态栏输出格式', file: '状态栏输出格式-v2.txt' },
-  { id: 'thinking', name: '思维链模板', file: '思维链模板.txt' }
+  { id: 'statusbar', name: '状态栏输出格式', file: '状态栏输出格式-v2.txt', kind: 'outputFormat' },
+  { id: 'thinking', name: '思维链模板', file: '思维链模板.txt', kind: 'thinking' },
+  { id: 'survival', name: '状态栏输出格式-荒野求生', file: '状态栏输出格式-荒野求生.txt', kind: 'outputFormat' }
 ];
 
 const items = PRESETS.map((p) => ({

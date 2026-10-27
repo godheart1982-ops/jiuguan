@@ -69,3 +69,18 @@ test('resolveCardPrompt: 卡级文本优先于模板选择', () => {
   const config = { promptLibrary: [{ id: 'b', content: '模板B' }], promptDefaults: {} };
   assert.equal(resolveCardPrompt({ outputFormat: '卡文本', outputFormatPresetId: 'b' }, config, 'outputFormat'), '卡文本');
 });
+
+test('ensurePromptLibrary: 老库条目无 kind 时按 id 回填类型，自定义默认输出格式', () => {
+  const config = {
+    promptLibrary: [
+      { id: 'thinking', content: '思维链' },
+      { id: 'statusbar', content: '状态栏' },
+      { id: 'custom-1', content: '自定义', custom: true }
+    ]
+  };
+  ensurePromptLibrary(config);
+  assert.equal(config.promptLibrary.find((i) => i.id === 'thinking').kind, 'thinking');
+  assert.equal(config.promptLibrary.find((i) => i.id === 'statusbar').kind, 'outputFormat');
+  assert.equal(config.promptLibrary.find((i) => i.id === 'custom-1').kind, 'outputFormat');
+  assert.ok(config.promptLibrary.every((i) => i.kind === 'thinking' || i.kind === 'outputFormat'));
+});

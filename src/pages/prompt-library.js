@@ -52,10 +52,24 @@ export async function renderPromptLibrary(container) {
           <button class="btn btn-ghost btn-small" data-act="edit" data-idx="${idx}">编辑</button>
           <button class="btn btn-ghost btn-small" data-act="export" data-idx="${idx}">导出</button>
           ${it.custom
-            ? `<button class="btn btn-danger btn-small" data-act="del" data-idx="${idx}">删除</button>`
+            ? `<select class="form-input" style="width: 96px; flex-shrink: 0;" data-act="kind" data-idx="${idx}" title="模板类型（决定出现在哪个下拉）">
+                <option value="outputFormat" ${it.kind !== 'thinking' ? 'selected' : ''}>输出格式</option>
+                <option value="thinking" ${it.kind === 'thinking' ? 'selected' : ''}>思维链</option>
+              </select>
+              <button class="btn btn-danger btn-small" data-act="del" data-idx="${idx}">删除</button>`
             : `<button class="btn btn-ghost btn-small" data-act="reset" data-idx="${idx}">恢复默认</button>`}
         </div>
       </div>`).join('');
+
+    listEl.querySelectorAll('select[data-act="kind"]').forEach((sel) => {
+      sel.addEventListener('change', async () => {
+        const item = config.promptLibrary[Number(sel.dataset.idx)];
+        if (!item) return;
+        item.kind = sel.value;
+        await saveConfig(config);
+        renderList();
+      });
+    });
 
     listEl.querySelectorAll('button[data-act]').forEach((btn) => {
       btn.addEventListener('click', async () => {
@@ -100,7 +114,7 @@ export async function renderPromptLibrary(container) {
   document.getElementById('btn-prompt-add').addEventListener('click', async () => {
     const name = await promptText({ title: '添加自定义模板', message: '模板名称：', placeholder: '例如：我的输出格式' });
     if (!name || !name.trim()) return;
-    const item = { id: 'custom-' + (await createUUID()), name: name.trim(), content: '', custom: true };
+    const item = { id: 'custom-' + (await createUUID()), name: name.trim(), content: '', custom: true, kind: 'outputFormat' };
     config.promptLibrary.push(item);
     await saveConfig(config);
     renderList();

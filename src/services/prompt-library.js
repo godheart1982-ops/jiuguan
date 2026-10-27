@@ -30,6 +30,13 @@ export function ensurePromptLibrary(config) {
       changed = true;
     }
   }
+  // 条目类型（输出格式/思维链）回填：老库条目无 kind 时按 id 推断，自定义默认输出格式
+  for (const it of config.promptLibrary) {
+    if (it && !it.kind) {
+      it.kind = it.id === 'thinking' ? 'thinking' : 'outputFormat';
+      changed = true;
+    }
+  }
   if (!config.promptDefaults || typeof config.promptDefaults !== 'object') {
     config.promptDefaults = { outputFormatId: '', thinkingFormatId: '' };
     changed = true;
