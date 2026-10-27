@@ -29,20 +29,8 @@ export async function renderPromptLibrary(container) {
   body.className = 'wb-manager-body';
   body.innerHTML = `
     <div class="form-section">
-      <div class="form-section-title">全局默认</div>
-      <div class="form-hint" style="margin-bottom: 8px;">卡上「输出格式 / 思考格式」留空即继承这里的全局默认，卡内填写则覆盖；特殊卡可在卡编辑页勾选「不继承」。模板升级只改库这一处，所有继承的卡同时生效。</div>
-      <div class="form-group">
-        <label class="form-label">全局输出格式</label>
-        <select class="form-input" id="global-output-format"></select>
-      </div>
-      <div class="form-group">
-        <label class="form-label">全局思维链</label>
-        <select class="form-input" id="global-thinking-format"></select>
-      </div>
-    </div>
-    <div class="form-section">
       <div class="form-section-title">模板列表</div>
-      <div class="form-hint" style="margin-bottom: 8px;">内置模板可编辑、可导出、可恢复默认；自定义模板可增删改。导出的 txt 与仓库根目录的模板文件一致（含 BOM）。</div>
+      <div class="form-hint" style="margin-bottom: 8px;">内置模板可编辑、可导出、可恢复默认；自定义模板可增删改。导出的 txt 与仓库根目录的模板文件一致（含 BOM）。在卡编辑页为每张卡选择加载哪份输出格式/思维链模板（卡级选择，无全局默认）。</div>
       <div id="prompt-list"></div>
     </div>
   `;
@@ -52,27 +40,6 @@ export async function renderPromptLibrary(container) {
     return String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  function globalTags(id) {
-    const tags = [];
-    if (config.promptDefaults.outputFormatId === id) tags.push('全局输出格式');
-    if (config.promptDefaults.thinkingFormatId === id) tags.push('全局思维链');
-    return tags.length ? ` · <span style="color: var(--accent, #c9a86a);">${tags.join('、')}</span>` : '';
-  }
-
-  function renderGlobals() {
-    const options = ['<option value="">无</option>']
-      .concat(config.promptLibrary.map((it) => `<option value="${escapeHtml(it.id)}">${escapeHtml(it.name)}</option>`))
-      .join('');
-    const outSel = document.getElementById('global-output-format');
-    const thinkSel = document.getElementById('global-thinking-format');
-    outSel.innerHTML = options;
-    thinkSel.innerHTML = options;
-    outSel.value = config.promptDefaults.outputFormatId || '';
-    thinkSel.value = config.promptDefaults.thinkingFormatId || '';
-    if (outSel.value !== (config.promptDefaults.outputFormatId || '')) outSel.value = '';
-    if (thinkSel.value !== (config.promptDefaults.thinkingFormatId || '')) thinkSel.value = '';
-  }
-
   function renderList() {
     const listEl = document.getElementById('prompt-list');
     listEl.innerHTML = config.promptLibrary.map((it, idx) => `
@@ -80,7 +47,7 @@ export async function renderPromptLibrary(container) {
         <div class="memory-card-header" style="flex-wrap: wrap; gap: 6px;">
           <span style="flex: 1; min-width: 180px; font-size: 0.95rem; font-weight: 600;">
             ${escapeHtml(it.name)}
-            <span style="font-weight: 400; font-size: 0.8rem; color: #888;">${it.custom ? '自定义' : '内置'} · ${String(it.content || '').length} 字${globalTags(it.id)}</span>
+            <span style="font-weight: 400; font-size: 0.8rem; color: #888;">${it.custom ? '自定义' : '内置'} · ${String(it.content || '').length} 字</span>
           </span>
           <button class="btn btn-ghost btn-small" data-act="edit" data-idx="${idx}">编辑</button>
           <button class="btn btn-ghost btn-small" data-act="export" data-idx="${idx}">导出</button>
@@ -123,23 +90,11 @@ export async function renderPromptLibrary(container) {
           if (config.promptDefaults.outputFormatId === item.id) config.promptDefaults.outputFormatId = '';
           if (config.promptDefaults.thinkingFormatId === item.id) config.promptDefaults.thinkingFormatId = '';
           await saveConfig(config);
-          renderGlobals();
           renderList();
         }
       });
     });
   }
-
-  document.getElementById('global-output-format').addEventListener('change', async (e) => {
-    config.promptDefaults.outputFormatId = e.target.value;
-    await saveConfig(config);
-    renderList();
-  });
-  document.getElementById('global-thinking-format').addEventListener('change', async (e) => {
-    config.promptDefaults.thinkingFormatId = e.target.value;
-    await saveConfig(config);
-    renderList();
-  });
 
   document.getElementById('btn-prompt-back').addEventListener('click', () => navigate('home'));
   document.getElementById('btn-prompt-add').addEventListener('click', async () => {
@@ -148,11 +103,9 @@ export async function renderPromptLibrary(container) {
     const item = { id: 'custom-' + (await createUUID()), name: name.trim(), content: '', custom: true };
     config.promptLibrary.push(item);
     await saveConfig(config);
-    renderGlobals();
     renderList();
   });
 
-  renderGlobals();
   renderList();
 }
 

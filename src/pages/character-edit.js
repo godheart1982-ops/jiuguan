@@ -1,5 +1,6 @@
 import { navigate, refreshCharacters } from '../app.js';
-import { getCharacter, saveCharacter, saveAvatar, getAvatarDataUrl, createUUID, getPlatform, listWorldBooks } from '../services/storage.js';
+import { getCharacter, saveCharacter, saveAvatar, getAvatarDataUrl, createUUID, getPlatform, listWorldBooks, getConfig } from '../services/storage.js';
+import { ensurePromptLibrary } from '../services/prompt-library.js';
 import { attachCharCounter } from '../utils/counter.js';
 import { openBigTextEditor } from '../utils/big-editor.js';
 import { normalizeWorldBookSettings, createEmptyWorldBookEntry } from '../services/world-book.js';
@@ -53,6 +54,24 @@ export async function renderCharacterEdit(container, characterId) {
   // 世界书：角色设置 + 专属条目 + 绑定独立库
   let worldBookEdit = normalizeWorldBookSettings(character.worldBook);
   const allWorldBooks = await listWorldBooks().catch(() => []);
+
+  // 模板下拉：提示词库（输出格式/思维链按卡选择加载，不再有全局默认）
+  const promptConfig = await getConfig();
+  ensurePromptLibrary(promptConfig);
+  const presetOptions = ['<option value="">无（不注入）</option>']
+    .concat(promptConfig.promptLibrary.map((it) => `<option value="${escapeHtml(it.id)}">${escapeHtml(it.name)}</option>`))
+    .join('');
+  document.getElementById('input-thinking-preset').innerHTML = presetOptions;
+  document.getElementById('input-output-preset').innerHTML = presetOptions;
+  // 预选：新版 presetId 优先（含显式"无"）；老卡留空且未禁用全局时预选旧全局默认，保存后即固化到卡上
+  const legacyThinking = (!character.noGlobalPrompts && !(character.thinkingFormat || '').trim())
+    ? (promptConfig.promptDefaults.thinkingFormatId || '') : '';
+  const legacyOutput = (!character.noGlobalPrompts && !(character.outputFormat || '').trim())
+    ? (promptConfig.promptDefaults.outputFormatId || '') : '';
+  document.getElementById('input-thinking-preset').value =
+    character.thinkingPresetId !== undefined ? character.thinkingPresetId : legacyThinking;
+  document.getElementById('input-output-preset').value =
+    character.outputFormatPresetId !== undefined ? character.outputFormatPresetId : legacyOutput;
 
   let avatarDataUrl = character.avatar ? await getAvatarDataUrl(character.avatar) : null;
   let pendingAvatarBase64 = null;
@@ -130,8 +149,12 @@ export async function renderCharacterEdit(container, characterId) {
         <label class="form-label">思考格式（Markdown）</label>
         <button class="btn btn-ghost btn-small" id="btn-edit-thinking-format">⛶ 展开编辑</button>
       </div>
+      <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 6px;">
+        <span style="font-size: 0.85rem; color: #888; flex-shrink: 0;">模板：</span>
+        <select class="form-input" id="input-thinking-preset" style="flex: 1;"></select>
+      </div>
       <textarea class="form-textarea" id="input-thinking-format" placeholder="填写思维链要求，例如：先在 <思考></思考> 标签内分析当前局势、角色心理与走向，再开始正文。">${escapeHtml(character.thinkingFormat || '')}</textarea>
-      <div class="form-hint">选填。仅当「设置 → 思考链输出」开关打开时，才会拼进 system prompt（放在输出格式之前）。给不需要思维链的模型可在设置里关闭。留空 = 继承侧边栏「提示词库」的全局默认思维链。</div>
+      <div class="form-hint">选填。仅当「设置 → 思考链输出」开关打开时，才会拼进 system prompt（放在输出格式之前）。给不需要思维链的模型可在设置里关闭。文本框留空 = 使用上方选中的模板；填写文本则完全覆盖模板。</div>
     </div>
 
     <div class="form-group">
@@ -139,16 +162,12 @@ export async function renderCharacterEdit(container, characterId) {
         <label class="form-label">输出格式（Markdown）</label>
         <button class="btn btn-ghost btn-small" id="btn-edit-output-format">⛶ 展开编辑</button>
       </div>
+      <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 6px;">
+        <span style="font-size: 0.85rem; color: #888; flex-shrink: 0;">模板：</span>
+        <select class="form-input" id="input-output-preset" style="flex: 1;"></select>
+      </div>
       <textarea class="form-textarea" id="input-output-format" placeholder="在这里填写你期望的 AI 回复格式，例如状态栏、行动选项、正文结构等要求。支持 Markdown。">${escapeHtml(character.outputFormat)}</textarea>
-      <div class="form-hint">选填。填写后，系统会自动把它追加到角色设定后面，作为 AI 回复格式的强制约束。留空 = 继承侧边栏「提示词库」的全局默认输出格式。</div>
-    </div>
-
-    <div class="form-group">
-      <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: normal;">
-        <input type="checkbox" id="input-no-global-prompts" ${character.noGlobalPrompts ? 'checked' : ''}>
-        本卡不继承全局输出格式/思维链
-      </label>
-      <div class="form-hint">勾选后，卡内留空即不注入（适合制卡助手等不需要剧情格式的特殊卡）；卡内填写的内容始终优先于全局默认。</div>
+      <div class="form-hint">选填。填写后，系统会自动把它追加到角色设定后面，作为 AI 回复格式的强制约束。文本框留空 = 使用上方选中的模板；填写文本则完全覆盖模板。</div>
     </div>
 
     <div class="form-section">
@@ -716,7 +735,10 @@ export async function renderCharacterEdit(container, characterId) {
         .split(/[,，、;；\s]+/).map((s) => s.trim()).filter(Boolean);
       character.thinkingFormat = document.getElementById('input-thinking-format').value.trim();
       character.outputFormat = document.getElementById('input-output-format').value.trim();
-      character.noGlobalPrompts = document.getElementById('input-no-global-prompts').checked;
+      character.thinkingPresetId = document.getElementById('input-thinking-preset').value;
+      character.outputFormatPresetId = document.getElementById('input-output-preset').value;
+      // 新版卡级模板选择，旧"不继承全局"字段不再需要（显式"无"已能表达）
+      delete character.noGlobalPrompts;
       character.mainControl = {
         name: document.getElementById('input-main-control-name').value.trim(),
         description: document.getElementById('input-main-control-description').value.trim()

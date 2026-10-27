@@ -50,3 +50,22 @@ test('ensurePromptLibrary: 下线内置条目自动清除并解除全局引用�
   assert.ok(config.promptLibrary.some((i) => i.id === 'custom-1'));
   assert.equal(config.promptDefaults.outputFormatId, '');
 });
+
+test('resolveCardPrompt: 卡级模板选择优先于旧全局默认', () => {
+  const config = {
+    promptLibrary: [{ id: 'a', content: '模板A' }, { id: 'b', content: '模板B' }],
+    promptDefaults: { outputFormatId: 'a', thinkingFormatId: '' }
+  };
+  assert.equal(resolveCardPrompt({ outputFormatPresetId: 'b' }, config, 'outputFormat'), '模板B');
+  assert.equal(resolveCardPrompt({ outputFormatPresetId: 'a' }, config, 'outputFormat'), '模板A');
+});
+
+test('resolveCardPrompt: 显式选择"无"则不再回退旧全局默认', () => {
+  const config = { promptLibrary: [{ id: 'a', content: '模板A' }], promptDefaults: { outputFormatId: 'a', thinkingFormatId: '' } };
+  assert.equal(resolveCardPrompt({ outputFormatPresetId: '' }, config, 'outputFormat'), '');
+});
+
+test('resolveCardPrompt: 卡级文本优先于模板选择', () => {
+  const config = { promptLibrary: [{ id: 'b', content: '模板B' }], promptDefaults: {} };
+  assert.equal(resolveCardPrompt({ outputFormat: '卡文本', outputFormatPresetId: 'b' }, config, 'outputFormat'), '卡文本');
+});

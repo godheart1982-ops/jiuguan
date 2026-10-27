@@ -53,11 +53,18 @@ export function findPromptContent(config, id) {
 
 /**
  * 解析某张卡实际使用的输出格式/思维链文本。
+ * 优先级：卡级文本（覆盖）→ 卡级模板选择（outputFormatPresetId / thinkingPresetId，指向库条目）
+ *   → 显式选择"无"（presetId === ''）→ 旧版全局默认（仅历史配置回退，设置入口已下线）。
  * kind: 'outputFormat' | 'thinkingFormat'
  */
 export function resolveCardPrompt(character, config, kind) {
   const own = character && String(character[kind] || '').trim();
   if (own) return character[kind];
+  const presetKey = kind === 'outputFormat' ? 'outputFormatPresetId' : 'thinkingPresetId';
+  const presetId = character && character[presetKey];
+  if (presetId) return findPromptContent(config, presetId);
+  if (presetId === '') return ''; // 新版卡上明确选择"无"
+  // 旧版全局默认（已下线设置入口，仅为未按新结构保存过的老卡保留回退）
   if (character && character.noGlobalPrompts) return '';
   const idKey = kind === 'outputFormat' ? 'outputFormatId' : 'thinkingFormatId';
   const id = config && config.promptDefaults && config.promptDefaults[idKey];
