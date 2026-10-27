@@ -183,12 +183,12 @@ test('applyTurnFacts: 未提供 relations/intel 字段时不动现有条目（�
   assert.deepEqual(memory.facts.worldEvents, [{ text: '地铁停运→开始' }]);
 });
 
-test('applyTurnFacts: 世界事件同事件名保留最新阶段', () => {
+test('applyTurnFacts: 世界事件同名追加不覆盖——保留最近3条阶段轨迹', () => {
   const memory = { facts: emptyFacts() };
   applyTurnFactsToMemory(memory, { worldEvents: ['裁员评审→发酵'] });
   applyTurnFactsToMemory(memory, { worldEvents: ['裁员评审→平息'] });
-  assert.equal(memory.facts.worldEvents.length, 1);
-  assert.equal(memory.facts.worldEvents[0].text, '裁员评审→平息');
+  assert.equal(memory.facts.worldEvents.length, 2);
+  assert.deepEqual(memory.facts.worldEvents.map((w) => w.text), ['裁员评审→发酵', '裁员评审→平息']);
 });
 
 test('applyTurnFacts: content 里的旧式 ｜世界： 标记也会并入世界事件', () => {
