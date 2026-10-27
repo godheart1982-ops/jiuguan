@@ -280,7 +280,7 @@ export function formatFactsMemo(factsRaw, mcName) {
   }
   if (facts.worldEvents.length) {
     if (lines.length) lines.push('');
-    lines.push('世界动态（公共事件与重要NPC的场外个人线；相关NPC重新出场或事件被涉及时须承接最新进展，禁止与已发生剧情冲突；标「完结」的仅作历史参考、不再推进）：');
+    lines.push('世界动态（公共事件与重要NPC的场外个人线，此处为各线最新状态、历史经过见短期/长期记忆；相关NPC重新出场或事件被涉及时须承接最新进展，禁止与已发生剧情冲突；标「完结」的仅作历史参考、不再推进）：');
     facts.worldEvents.forEach((w) => {
       lines.push(`· ${w.text}`);
     });
@@ -473,7 +473,7 @@ export async function summarizeTurn(userContent, assistantContent, sceneDate, co
 }
 3. date 必须使用：${date}
 4. 【指代铁律】所有人名一律写具体名字，禁止使用「她/他/对方/有人」指代——这条记忆会脱离上下文被单独阅读。
-5. events/changes/mood 只写本轮新发生的事，不要复述前情摘要。
+5. events/changes/mood 只写本轮新发生的事，不要复述前情摘要。重要NPC的场外个人线变化（相亲、离职、搬家、生病等）也必须写进 events/changes——facts.worldEvents 只保存每条线的最新状态（下次更新即覆盖），历史经过靠这里的叙事进入短期/长期记忆，禁止只在 worldEvents 里记录。
 6. promises【强制检查·全量重写】：输出本轮之后的**完整约定清单**，不是增量——
    - 仍未完成的约定：从上方「当前未完成约定清单」中**原样照抄**文本（禁止改写、禁止遗漏），标 open；
    - 本轮完成/兑现/取消的约定：同样**原样照抄**清单中的文本，标 done；
@@ -755,7 +755,7 @@ export async function summarizeShortTermMemories(shortTerm, context = {}) {
 要求：
 1. 合并重复内容，删除琐碎细节，只保留主要情节、关键转折和重要信息。必须保留具体承诺/约定、数字、人名地名、人物关系或状态的变化，不要省略主语；人名一律写具体名字，禁止用「她/他/对方」指代——这段记忆会脱离上下文被单独阅读。
 2. 变化弧线【重要】：若本轮剧情与参考中的旧状态相比发生了变化（关系/计划/立场/住处等），明确写出「由 X 变为 Y」，不要只写静态结果。
-3. 世界事件已由「事实备忘」单独维护，content 不必再抄公共事件追踪表；若旧摘要里仍有"｜世界："字样可忽略或并入叙述一句即可。
+3. 公共事件追踪表已由「事实备忘」单独维护，content 不必再抄；但重要NPC的场外个人线变化（相亲、离职、搬家等）属于情节，必须保留其发展过程（由X变为Y），不得当作世界事件省略；若旧摘要里仍有"｜世界："字样可忽略或并入叙述一句即可。
 4. 输出一条 JSON，不要任何额外解释。
 5. JSON 格式必须严格如下：
    {"startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD","content":"长期记忆摘要","title":"目录标题≤25字，含关键人名与核心事件（示范：与苏晴地铁偶遇并交换联系方式）","recallKeys":["3-5个召回关键词，选人名/地名/事件专名，禁止泛用词"]}
@@ -770,7 +770,7 @@ ${formatted}
   const raw = await sendChat([
     {
       role: 'system',
-      content: '你是记忆整合助手。请把短期记忆合并精简为一段连贯的长期情节记忆，严格按 JSON 格式输出。参考内容只读，严禁并入或重写；世界事件不在此维护。'
+      content: '你是记忆整合助手。请把短期记忆合并精简为一段连贯的长期情节记忆，严格按 JSON 格式输出。参考内容只读，严禁并入或重写；公共事件追踪表不在此维护，但NPC场外个人线的变化须保留为情节。'
     },
     { role: 'user', content: prompt }
   ], { api: memApi, usageContext: { kind: 'memory' } });
@@ -820,7 +820,7 @@ export async function condenseLongTermMemory(longTerm) {
 
 要求：
 1. 合并重复或相近的内容，删除对剧情影响很小的琐碎细节，保留核心情节和关键转折。必须保留具体承诺/约定、数字、人名地名、人物关系或状态的变化，不要省略主语；人名一律写具体名字，禁止用「她/他/对方」指代。
-2. 世界事件由「事实备忘」维护，精简时不必保留"｜世界："列表；旧文本中的该类标记可删除。
+2. 公共事件追踪表由「事实备忘」维护，精简时不必保留"｜世界："列表，旧文本中的该类标记可删除；但NPC场外个人线的重要变化属于情节，必须保留其发展过程。
 3. 输出一个 JSON 数组，不要任何额外解释。
 4. 数组中每个元素的格式：
    {"startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD","content":"精简后的内容"}
@@ -834,7 +834,7 @@ ${formatted}
   const raw = await sendChat([
     {
       role: 'system',
-      content: '你是记忆精简助手。请精简长期情节记忆，严格按 JSON 数组格式输出。世界事件不在此维护。'
+      content: '你是记忆精简助手。请精简长期情节记忆，严格按 JSON 数组格式输出。公共事件追踪表不在此维护，NPC场外个人线的变化须保留。'
     },
     { role: 'user', content: prompt }
   ], { api: memApi, usageContext: { kind: 'memory' } });
