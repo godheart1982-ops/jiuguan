@@ -454,14 +454,27 @@ test('normalizeFacts/applyTurnFacts: 主控端点归一化——「主控」映�
   assert.deepEqual(memory.facts.relations, [{ from: '艾莉娅', to: '李明', note: '恋人' }]);
 });
 
-test('applyTurnFactsToMemory: 世界动态按事件名合并——同名保留最新阶段，未报的条目原样保留', () => {
+test('applyTurnFactsToMemory: 世界动态按事件名追加合并——同名不覆盖、保留轨迹，未报的条目原样保留', () => {
   const memory = { facts: emptyFacts() };
   applyTurnFactsToMemory(memory, { worldEvents: [{ text: '裁员评审→发酵' }, { text: '林静→相亲中' }] });
   assert.deepEqual(memory.facts.worldEvents.map((w) => w.text), ['裁员评审→发酵', '林静→相亲中']);
   applyTurnFactsToMemory(memory, { worldEvents: [{ text: '裁员评审→完结' }] });
-  assert.deepEqual(memory.facts.worldEvents.map((w) => w.text), ['裁员评审→完结', '林静→相亲中']);
+  // 同名不覆盖：发酵保留，完结追加
+  assert.deepEqual(memory.facts.worldEvents.map((w) => w.text), ['裁员评审→发酵', '林静→相亲中', '裁员评审→完结']);
   applyTurnFactsToMemory(memory, { worldEvents: [] });
-  assert.equal(memory.facts.worldEvents.length, 2);
+  assert.equal(memory.facts.worldEvents.length, 3);
+});
+
+test('applyTurnFactsToMemory: 同名最多保留最近3条，完全重复文本去重', () => {
+  const memory = { facts: emptyFacts() };
+  const stages = ['发酵', '升级', '平息', '完结', '后续'];
+  for (const s of stages) {
+    applyTurnFactsToMemory(memory, { worldEvents: [{ text: `林静→相亲${s}` }] });
+  }
+  // 只保留最近3条：升级/平息/完结被挤掉发酵，最新是后续
+  assert.deepEqual(memory.facts.worldEvents.map((w) => w.text), ['林静→相亲平息', '林静→相亲完结', '林静→相亲后续']);
+  applyTurnFactsToMemory(memory, { worldEvents: [{ text: '林静→相亲后续' }] });
+  assert.equal(memory.facts.worldEvents.length, 3);
 });
 
 test('applyTurnFactsToMemory: 世界动态超过上限丢最旧', () => {
