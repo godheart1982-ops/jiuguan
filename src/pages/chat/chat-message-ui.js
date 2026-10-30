@@ -138,39 +138,71 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
     }
   }
 
-  // 右键编辑
-  wrapper.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    showContextMenu(e.clientX, e.clientY, [
-      {
-        label: '编辑消息',
-        action: () => openMessageEditor(msg, wrapper, currentChat)
-      },
-      {
-        label: '复制原文',
-        action: () => navigator.clipboard.writeText(msg.content)
-      },
-      ...(onBranch ? [{
-        label: '从这里分支',
-        action: () => {
-          const index = currentChat.messages.findIndex(m => m.timestamp === msg.timestamp && m.role === msg.role);
-          if (index !== -1) onBranch(index);
-        }
-      }] : []),
-      {
-        label: '删除消息',
-        action: async () => {
-          if (!confirm('确定要删除这条消息吗？')) return;
-          const index = currentChat.messages.findIndex(m => m.timestamp === msg.timestamp && m.role === msg.role);
-          if (index !== -1) {
-            currentChat.messages.splice(index, 1);
-            await saveChat(currentChat);
-            if (onUpdate) onUpdate();
-          }
+  // 消息操作菜单（编辑/复制/分支/删除）：右键与移动端长按共用
+  const menuItems = [
+    {
+      label: '编辑消息',
+      action: () => openMessageEditor(msg, wrapper, currentChat)
+    },
+    {
+      label: '复制原文',
+      action: () => navigator.clipboard.writeText(msg.content)
+    },
+    ...(onBranch ? [{
+      label: '从这里分支',
+      action: () => {
+        const index = currentChat.messages.findIndex(m => m.timestamp === msg.timestamp && m.role === msg.role);
+        if (index !== -1) onBranch(index);
+      }
+    }] : []),
+    {
+      label: '删除消息',
+      action: async () => {
+        if (!confirm('确定要删除这条消息吗？')) return;
+        const index = currentChat.messages.findIndex(m => m.timestamp === msg.timestamp && m.role === msg.role);
+        if (index !== -1) {
+          currentChat.messages.splice(index, 1);
+          await saveChat(currentChat);
+          if (onUpdate) onUpdate();
         }
       }
-    ]);
+    }
+  ];
+  const openMenu = (x, y) => showContextMenu(x, y, menuItems);
+
+  // 桌面右键
+  wrapper.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    openMenu(e.clientX, e.clientY);
   });
+
+  // 移动端：长按 500ms 弹出同一菜单（位移超 10px 或抬起/取消则中止，不干扰正常点选与滑动）
+  let pressTimer = null;
+  let pressStart = null;
+  const cancelPress = () => {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+  };
+  wrapper.addEventListener('touchstart', (e) => {
+    cancelPress();
+    const t = e.touches[0];
+    pressStart = { x: t.clientX, y: t.clientY };
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      openMenu(pressStart.x, pressStart.y);
+    }, 500);
+  }, { passive: true });
+  wrapper.addEventListener('touchmove', (e) => {
+    if (!pressTimer || !pressStart) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - pressStart.x) > 10 || Math.abs(t.clientY - pressStart.y) > 10) {
+      cancelPress();
+    }
+  }, { passive: true });
+  wrapper.addEventListener('touchend', cancelPress, { passive: true });
+  wrapper.addEventListener('touchcancel', cancelPress, { passive: true });
 
   container.appendChild(wrapper);
 

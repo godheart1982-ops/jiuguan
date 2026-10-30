@@ -136,6 +136,8 @@ export async function renderCharacterEdit(container, characterId) {
       <div class="form-hint">只有名单内的角色会生成场外个人线（不在场也自行行动、发生事件，随记忆回流）；留空 = 由 AI 自行判断重要NPC。名单外的角色不编场外戏，只出现在当下场景。</div>
     </div>
 
+    <details class="form-section">
+      <summary class="form-section-title">输出格式与思维链</summary>
     <div class="form-group">
       <div class="form-label-with-action">
         <label class="form-label">思考格式（Markdown）</label>
@@ -161,9 +163,10 @@ export async function renderCharacterEdit(container, characterId) {
       <textarea class="form-textarea" id="input-output-format" placeholder="在这里填写你期望的 AI 回复格式，例如状态栏、行动选项、正文结构等要求。支持 Markdown。">${escapeHtml(character.outputFormat)}</textarea>
       <div class="form-hint">选填。填写后，系统会自动把它追加到角色设定后面，作为 AI 回复格式的强制约束。文本框留空 = 使用上方选中的模板；填写文本则完全覆盖模板。</div>
     </div>
+    </details>
 
-    <div class="form-section">
-      <div class="form-section-title">主控设置</div>
+    <details class="form-section">
+      <summary class="form-section-title">主控设置</summary>
       <div class="form-group">
         <label class="form-label">主控名称</label>
         <input class="form-input" id="input-main-control-name" type="text" placeholder="你的名字/身份" value="${escapeHtml(character.mainControl.name)}">
@@ -176,10 +179,10 @@ export async function renderCharacterEdit(container, characterId) {
         <textarea class="form-textarea" id="input-main-control-description" placeholder="描述主控的性格、背景、外貌、与角色的关系等。这部分会作为 system prompt 的一部分。">${escapeHtml(character.mainControl.description)}</textarea>
         <div class="form-hint">例如：你叫李明，25岁，是一名普通大学生……</div>
       </div>
-    </div>
+    </details>
 
-    <div class="form-section">
-      <div class="form-section-title">剧情线（可选）</div>
+    <details class="form-section">
+      <summary class="form-section-title">剧情线（可选）</summary>
       <div class="form-hint" style="margin-bottom: 8px;">本卡的默认主剧情线——开新对话时自动复制进对话（指针从第 1 阶段开始）；玩的时候在记忆编辑器「剧情线」页签改的是副本，不动这里。留空 = 纯自由局。写法和示范见仓库《剧情卡模板.txt》。</div>
       <div class="form-group" style="display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px;">
         <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;"><input type="radio" name="card-plot-mode" value="soft"> 引力（选择优先）</label>
@@ -187,10 +190,10 @@ export async function renderCharacterEdit(container, characterId) {
       </div>
       <div id="card-plot-stages"></div>
       <button class="btn btn-ghost btn-small" id="btn-card-plot-add" type="button">＋ 添加阶段</button>
-    </div>
+    </details>
 
-    <div class="form-section">
-      <div class="form-section-title">叙事规则</div>
+    <details class="form-section">
+      <summary class="form-section-title">叙事规则</summary>
       <div class="form-group">
         <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: normal;">
           <input type="checkbox" id="input-enable-random-narrative" style="width: 16px; height: 16px; cursor: pointer;" ${character.enableRandomNarrative !== false ? 'checked' : ''}>
@@ -198,10 +201,10 @@ export async function renderCharacterEdit(container, characterId) {
         </label>
         <div class="form-hint">开启后，AI 会按内置的「随机 NPC 生成规则」与「事件系统」，在对话中自然引入临时人物与叙事事件（涟漪/暗涌/地震）。关闭则不注入相关规则，可节省 token。</div>
       </div>
-    </div>
+    </details>
 
-    <div class="form-section" id="world-book-section">
-      <div class="form-section-title">世界书（类 SillyTavern）</div>
+    <details class="form-section" id="world-book-section">
+      <summary class="form-section-title">世界书（类 SillyTavern）</summary>
       <div class="form-hint" style="margin-bottom: 10px;">
         常驻 / 关键词命中后注入 system（设定后）。可绑定侧边栏「世界书库」中的独立书，也可写本卡专属条目。每轮最多 10 条；支持递归。不写历史、不进记忆。
         <button type="button" class="btn btn-ghost btn-small" id="btn-goto-worldbook-lib" style="margin-left: 6px;">管理世界书库 →</button>
@@ -247,7 +250,7 @@ export async function renderCharacterEdit(container, characterId) {
       <div class="form-row" style="margin-top: 8px; gap: 8px;">
         <button type="button" class="btn btn-ghost" id="btn-worldbook-add">＋ 添加本卡条目</button>
       </div>
-    </div>
+    </details>
 
     <div class="form-row">
       <div class="form-group">
@@ -670,6 +673,8 @@ export async function renderCharacterEdit(container, characterId) {
       <div class="memory-card" style="margin-bottom: 8px;">
         <div class="memory-card-header">
           <span style="flex: 1; font-size: 0.9rem; font-weight: 600;">角色 ${i + 1}${i === 0 ? '（主角）' : ''}</span>
+          <button class="btn btn-ghost btn-small role-module-up" data-idx="${i}" ${i === 0 ? 'disabled' : ''} type="button" title="上移">↑</button>
+          <button class="btn btn-ghost btn-small role-module-down" data-idx="${i}" ${i === roleModuleEdit.length - 1 ? 'disabled' : ''} type="button" title="下移">↓</button>
           <button class="btn btn-ghost btn-small role-module-expand" data-idx="${i}" type="button">⛶ 展开编辑</button>
           <button class="btn btn-danger btn-small role-module-del" data-idx="${i}" type="button">删除</button>
         </div>
@@ -683,6 +688,22 @@ export async function renderCharacterEdit(container, characterId) {
     roleModuleListEl.querySelectorAll('.role-module-del').forEach((btn) => {
       btn.addEventListener('click', () => {
         roleModuleEdit.splice(Number(btn.dataset.idx), 1);
+        renderRoleModules();
+      });
+    });
+    roleModuleListEl.querySelectorAll('.role-module-up').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const i = Number(btn.dataset.idx);
+        if (i <= 0) return;
+        [roleModuleEdit[i - 1], roleModuleEdit[i]] = [roleModuleEdit[i], roleModuleEdit[i - 1]];
+        renderRoleModules();
+      });
+    });
+    roleModuleListEl.querySelectorAll('.role-module-down').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const i = Number(btn.dataset.idx);
+        if (i >= roleModuleEdit.length - 1) return;
+        [roleModuleEdit[i], roleModuleEdit[i + 1]] = [roleModuleEdit[i + 1], roleModuleEdit[i]];
         renderRoleModules();
       });
     });

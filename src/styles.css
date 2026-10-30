@@ -2729,3 +2729,28 @@ body::before {
 @keyframes st-pulse {
   50% { opacity: 0.25; transform: scale(0.8); }
 }
+
+/* 卡编辑页可折叠分区（details/summary） */
+details.form-section > summary.form-section-title {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+details.form-section > summary.form-section-title::-webkit-details-marker {
+  display: none;
+}
+details.form-section > summary.form-section-title::before {
+  content: '▶';
+  font-size: 0.75em;
+  color: #888;
+  transition: transform 0.15s;
+}
+details.form-section[open] > summary.form-section-title::before {
+  content: '▼';
+}
+details.form-section > summary.form-section-title:hover {
+  color: var(--accent, #c9a86a);
+}
