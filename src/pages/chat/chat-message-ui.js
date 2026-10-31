@@ -176,7 +176,7 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
     openMenu(e.clientX, e.clientY);
   });
 
-  // 移动端：长按 500ms 弹出同一菜单（位移超 10px 或抬起/取消则中止，不干扰正常点选与滑动）
+  // 移动端：长按 1000ms 弹出同一菜单（位移超 10px 或抬起/取消则中止，不干扰正常点选与滑动）
   let pressTimer = null;
   let pressStart = null;
   const cancelPress = () => {
@@ -192,7 +192,7 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
     pressTimer = setTimeout(() => {
       pressTimer = null;
       openMenu(pressStart.x, pressStart.y);
-    }, 500);
+    }, 1000);
   }, { passive: true });
   wrapper.addEventListener('touchmove', (e) => {
     if (!pressTimer || !pressStart) return;
