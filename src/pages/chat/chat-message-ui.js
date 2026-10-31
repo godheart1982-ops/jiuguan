@@ -176,7 +176,7 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
     openMenu(e.clientX, e.clientY);
   });
 
-  // 移动端：长按 1000ms 弹出同一菜单（位移超 10px 或抬起/取消则中止，不干扰正常点选与滑动）
+  // 移动端：长按 1000ms 弹出同一菜单（位移超 10px / 抬起 / 滚动 / 节点被流式重绘卸载则中止）
   let pressTimer = null;
   let pressStart = null;
   const cancelPress = () => {
@@ -191,6 +191,8 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
     pressStart = { x: t.clientX, y: t.clientY };
     pressTimer = setTimeout(() => {
       pressTimer = null;
+      // 流式生成会重建消息 DOM：旧节点已卸载时不许在过期节点上弹菜单
+      if (!wrapper.isConnected) return;
       openMenu(pressStart.x, pressStart.y);
     }, 1000);
   }, { passive: true });
@@ -203,6 +205,8 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
   }, { passive: true });
   wrapper.addEventListener('touchend', cancelPress, { passive: true });
   wrapper.addEventListener('touchcancel', cancelPress, { passive: true });
+  // 滚动即取消长按：流式生成中上下滑动时手指位移可能不到 10px，只能靠滚动事件兜底
+  container.addEventListener('scroll', cancelPress, { passive: true });
 
   container.appendChild(wrapper);
 
