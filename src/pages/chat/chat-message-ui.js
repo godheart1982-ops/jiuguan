@@ -170,43 +170,11 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
   ];
   const openMenu = (x, y) => showContextMenu(x, y, menuItems);
 
-  // 桌面右键
+  // 桌面右键（移动端长按走系统默认文字选择，不弹自定义菜单）
   wrapper.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     openMenu(e.clientX, e.clientY);
   });
-
-  // 移动端：长按 1000ms 弹出同一菜单（位移超 10px / 抬起 / 滚动 / 节点被流式重绘卸载则中止）
-  let pressTimer = null;
-  let pressStart = null;
-  const cancelPress = () => {
-    if (pressTimer) {
-      clearTimeout(pressTimer);
-      pressTimer = null;
-    }
-  };
-  wrapper.addEventListener('touchstart', (e) => {
-    cancelPress();
-    const t = e.touches[0];
-    pressStart = { x: t.clientX, y: t.clientY };
-    pressTimer = setTimeout(() => {
-      pressTimer = null;
-      // 流式生成会重建消息 DOM：旧节点已卸载时不许在过期节点上弹菜单
-      if (!wrapper.isConnected) return;
-      openMenu(pressStart.x, pressStart.y);
-    }, 1000);
-  }, { passive: true });
-  wrapper.addEventListener('touchmove', (e) => {
-    if (!pressTimer || !pressStart) return;
-    const t = e.touches[0];
-    if (Math.abs(t.clientX - pressStart.x) > 10 || Math.abs(t.clientY - pressStart.y) > 10) {
-      cancelPress();
-    }
-  }, { passive: true });
-  wrapper.addEventListener('touchend', cancelPress, { passive: true });
-  wrapper.addEventListener('touchcancel', cancelPress, { passive: true });
-  // 滚动即取消长按：流式生成中上下滑动时手指位移可能不到 10px，只能靠滚动事件兜底
-  container.addEventListener('scroll', cancelPress, { passive: true });
 
   container.appendChild(wrapper);
 
