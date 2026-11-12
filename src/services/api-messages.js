@@ -3,7 +3,7 @@
  */
 
 import { getConfig } from './storage.js';
-import { EVENT_SYSTEM_RULE, RANDOM_NPC_RULE, buildImmersiveActingRule } from './narrative-rules.js';
+import { EVENT_SYSTEM_RULE, RANDOM_NPC_RULE, CHARACTER_CALIBRATION_RULE, buildImmersiveActingRule } from './narrative-rules.js';
 import { isPaidImageProvider } from './image-gen.js';
 import { sanitizeHistoryIllustrationMarkers } from './illustration-markers.js';
 import { insertAuthorNote, shouldInjectAuthorNote, storyUserTurnCount } from './author-note.js';
@@ -281,9 +281,11 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   const userContent = webSearchRef
     ? (webSearchRef + '\n\n【用户本轮输入】\n' + userMessage)
     : userMessage;
+  // 人设校准紧跟本轮输入，仅存在于 API 请求；元指令不推进扮演，无需注入
+  const requestUserContent = metaCommand ? userContent : userContent + '\n\n' + CHARACTER_CALIBRATION_RULE;
   messages.push({
     role: 'user',
-    content: userContent
+    content: requestUserContent
   });
 
   // 作者注释：元指令轮不插。插在预填充之前，深度 0 时紧挨本次生成，预填充仍是最后一条。
