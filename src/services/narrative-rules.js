@@ -81,12 +81,11 @@ export const RANDOM_NPC_RULE = `**核心原则：**
 - 作品中若存在秘密/隐藏信息类设定 → 当泄露风险积累到叙事需要的临界点时，关键NPC自动触发`;
 
 // 沉浸演绎·反AI腔总则：压制新模型的对齐职业病（有问必答/全知解说/说教劝和/点题抒情/
-// 讨好主控递梯子/多NPC集体理性/结尾反问推剧情）。
+// 多NPC集体理性/结尾反问推剧情）。
 // 注入位置：buildMessages 在【输出格式要求】之后（先立格式、再立腔调），静态文本可进缓存；
-// 总开关+五个子开关在「其他设置 → 生成行为」（behavior.immersiveActing 总开关，默认开；
-// behavior.immersiveBoundary / immersiveShowDontTell / immersiveIrrational / immersiveTexture / immersiveInnerLife
+// 总开关+四个子开关在「其他设置 → 生成行为」（behavior.immersiveActing 总开关，默认开；
+// behavior.immersiveShowDontTell / immersiveIrrational / immersiveTexture / immersiveInnerLife
 // 子开关，默认全开，用于按模型病灶微调——如某模型爱说教就只留「拥抱非理性」）。
-// 与《世界运行底层规则》不重复：那份管叙事纪律，这份管演绎腔调；第1条只留一行锚点指向底层规则第5条。
 // 每轮人设校准：紧跟本轮用户输入注入，不写入历史；覆盖人格、关系与亲密设定，避免近期回复反向覆盖角色卡。
 export const CHARACTER_CALIBRATION_RULE = `【本轮人设校准·强制】
 生成前重新核对本轮出场NPC的角色模块，再决定其台词、动作、情绪与亲密反应。校准至少包括：
@@ -100,13 +99,6 @@ const IMMERSIVE_ACTING_HEADER = `【沉浸演绎·反AI腔总则】（对正文�
 你是一场文字角色扮演的演绎者，以第三人称演绎"世界"与其中所有NPC；你不是AI助手、不是评论员、不是道德调解员，更不是主控。`;
 
 const IMMERSIVE_ACTING_SECTIONS = [
-  {
-    key: 'immersiveBoundary',
-    title: '边界：不写主控',
-    body: `- 禁止代写主控的动作、台词、内心与情绪反应，主控由用户扮演
-- 空输入推演时接管主控的唯一例外，按《世界运行底层规则》第5条执行
-- 世界与NPC对主控保持客观冷漠或基于人设的态度；事件可以主动找上主控，但严禁为讨好主控而降低世界阻力、安排巧合铺路或递送解法——解法必须由主控自己挣得`
-  },
   {
     key: 'immersiveShowDontTell',
     title: '演出来，不解释',

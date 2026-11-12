@@ -69,13 +69,9 @@ export async function renderOtherSettingsModal() {
               <input type="checkbox" id="setting-immersive-acting" ${behavior.immersiveActing !== false ? 'checked' : ''}>
               <span>沉浸演绎·反AI腔总则（增强人味）</span>
             </label>
-            <div class="form-hint">开启后，向 system 注入一段演绎纪律：不写主控、演出来不解释、拥抱非理性、禁止点题抒情与客服腔，压制新模型"有问必答/句句完整"的对齐职业病。若某模型因此格式不稳定或风格过头，可在此关闭。</div>
+            <div class="form-hint">开启后，向 system 注入一段演绎纪律：演出来不解释、拥抱非理性、禁止点题抒情与客服腔，压制新模型"有问必答/句句完整"的对齐职业病。若某模型因此格式不稳定或风格过头，可在此关闭。</div>
           </div>
           <div class="form-group" style="margin-left: 24px; margin-top: -8px;">
-            <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-              <input type="checkbox" id="setting-immersive-boundary" ${behavior.immersiveBoundary !== false ? 'checked' : ''}>
-              <span>不写主控（防代打/防递梯子）</span>
-            </label>
             <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
               <input type="checkbox" id="setting-immersive-showdonttell" ${behavior.immersiveShowDontTell !== false ? 'checked' : ''}>
               <span>演出来不解释（防全知解说/防点题）</span>
@@ -92,7 +88,7 @@ export async function renderOtherSettingsModal() {
               <input type="checkbox" id="setting-immersive-innerlife" ${behavior.immersiveInnerLife !== false ? 'checked' : ''}>
               <span>内在生活（落笔先代入/允许误判/情绪惯性/对白交锋）</span>
             </label>
-            <div class="form-hint">总则的五条子规则，默认全开，仅在总开关开启时生效。按模型病灶微调：如某模型爱说教可只保留「拥抱非理性」，全部关闭则整段不注入。</div>
+            <div class="form-hint">总则的四条子规则，默认全开，仅在总开关开启时生效。按模型病灶微调：如某模型爱说教可只保留「拥抱非理性」，全部关闭则整段不注入。</div>
           </div>
           <div class="form-group">
             <label class="form-label">空发送推演指令</label>
@@ -229,7 +225,6 @@ export async function renderOtherSettingsModal() {
       autoAdvancePrompt: (autoAdvanceEl.value.trim() === DEFAULT_AUTO_ADVANCE_PROMPT.trim()) ? '' : autoAdvanceEl.value.trim(),
       memoryCorrection: document.getElementById('setting-memory-correction').checked,
       immersiveActing: document.getElementById('setting-immersive-acting').checked,
-      immersiveBoundary: document.getElementById('setting-immersive-boundary').checked,
       immersiveShowDontTell: document.getElementById('setting-immersive-showdonttell').checked,
       immersiveIrrational: document.getElementById('setting-immersive-irrational').checked,
       immersiveTexture: document.getElementById('setting-immersive-texture').checked,

@@ -129,7 +129,7 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   }
 
   // 沉浸演绎·反AI腔总则：放在输出格式要求之后（先立格式、再立腔调），静态文本可进缓存
-  // 总开关+五个子开关在「其他设置 → 生成行为」（behavior.immersiveActing 等），默认全开；
+  // 总开关+四个子开关在「其他设置 → 生成行为」（behavior.immersiveActing 等），默认全开；
   // 子开关可只留部分条目（按模型病灶微调），全部关闭则不注入
   const immersiveRule = buildImmersiveActingRule(config.behavior || {});
   if (immersiveRule) {

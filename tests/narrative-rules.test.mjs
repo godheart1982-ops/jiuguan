@@ -14,14 +14,15 @@ test('每轮人设校准：覆盖人格、关系名分、性设定与对主控�
 
 // ---------- buildImmersiveActingRule ----------
 
-test('buildImmersiveActingRule: 默认全开——五条全在且与 IMMERSIVE_ACTING_RULE 等价', () => {
+test('buildImmersiveActingRule: 默认全开——四条全在，不再限制主控动作与对话', () => {
   const rule = buildImmersiveActingRule();
   assert.equal(rule, IMMERSIVE_ACTING_RULE);
-  assert.ok(rule.includes('1. 边界：不写主控'));
-  assert.ok(rule.includes('2. 演出来，不解释'));
-  assert.ok(rule.includes('3. 拥抱非理性'));
-  assert.ok(rule.includes('4. 质感与节奏'));
-  assert.ok(rule.includes('5. 内在生活：写出活人'));
+  assert.ok(!rule.includes('不写主控'));
+  assert.ok(!rule.includes('禁止代写主控'));
+  assert.ok(rule.includes('1. 演出来，不解释'));
+  assert.ok(rule.includes('2. 拥抱非理性'));
+  assert.ok(rule.includes('3. 质感与节奏'));
+  assert.ok(rule.includes('4. 内在生活：写出活人'));
 });
 
 test('buildImmersiveActingRule: 总开关关闭返回空串', () => {
@@ -30,7 +31,6 @@ test('buildImmersiveActingRule: 总开关关闭返回空串', () => {
 
 test('buildImmersiveActingRule: 子开关全关返回空串（整段不注入）', () => {
   assert.equal(buildImmersiveActingRule({
-    immersiveBoundary: false,
     immersiveShowDontTell: false,
     immersiveIrrational: false,
     immersiveTexture: false,
@@ -39,13 +39,12 @@ test('buildImmersiveActingRule: 子开关全关返回空串（整段不注入）
 });
 
 test('buildImmersiveActingRule: 只留部分条目时序号重排不留空号', () => {
-  const rule = buildImmersiveActingRule({ immersiveBoundary: false, immersiveTexture: false });
-  assert.ok(!rule.includes('不写主控'));
+  const rule = buildImmersiveActingRule({ immersiveShowDontTell: false, immersiveTexture: false });
+  assert.ok(!rule.includes('演出来，不解释'));
   assert.ok(!rule.includes('质感与节奏'));
-  assert.ok(rule.includes('1. 演出来，不解释')); // 原第2条重排为1
-  assert.ok(rule.includes('2. 拥抱非理性')); // 原第3条重排为2
-  assert.ok(rule.includes('3. 内在生活：写出活人')); // 原第5条重排为3
-  assert.ok(!rule.includes('4.'));
+  assert.ok(rule.includes('1. 拥抱非理性'));
+  assert.ok(rule.includes('2. 内在生活：写出活人'));
+  assert.ok(!rule.includes('3.'));
 });
 
 test('buildImmersiveActingRule: 子开关裁剪不影响头部角色声明；单开一条也成立', () => {
@@ -53,7 +52,6 @@ test('buildImmersiveActingRule: 子开关裁剪不影响头部角色声明；单
   assert.ok(cut.includes('你是一场文字角色扮演的演绎者'));
   assert.ok(!cut.includes('拥抱非理性'));
   const only = buildImmersiveActingRule({
-    immersiveBoundary: false,
     immersiveShowDontTell: false,
     immersiveTexture: false,
     immersiveInnerLife: false
@@ -62,12 +60,12 @@ test('buildImmersiveActingRule: 子开关裁剪不影响头部角色声明；单
   assert.ok(!only.includes('2.'));
 });
 
-test('buildImmersiveActingRule: 内在生活可单独关闭，其余四条序号不受影响', () => {
+test('buildImmersiveActingRule: 内在生活可单独关闭，其余三条序号不受影响', () => {
   const rule = buildImmersiveActingRule({ immersiveInnerLife: false });
   assert.ok(!rule.includes('内在生活'));
   assert.ok(!rule.includes('落笔先代入'));
-  assert.ok(rule.includes('4. 质感与节奏'));
-  assert.ok(!rule.includes('5.'));
+  assert.ok(rule.includes('3. 质感与节奏'));
+  assert.ok(!rule.includes('4.'));
 });
 
 test('buildImmersiveActingRule: 内在生活默认开启，含代入/误判条款；质感条含金句不批发', () => {
