@@ -3,7 +3,7 @@
 轻量级 AI 角色扮演客户端：角色卡、多会话、记忆与世界书、插图与联网检索，连接 OpenAI / Anthropic / DeepSeek 等主流 API。  
 支持 **Windows 桌面（Electron）**、**Android（Capacitor）**，另可构建纯网页资源。
 
-当前 Android 版本：**2.1.130**（`versionCode` **184**）
+当前 Android 版本：**2.1.131**（`versionCode` **185**）
 
 ---
 
@@ -278,4 +278,4 @@ jiuguan/
 
 - **package.json**：`1.0.0`（npm 包版本，与 App 展示版可不同）
 - **Android App**：见 `android/app/build.gradle`  
-  当前文档对齐：**2.1.130** / **184**
+  当前文档对齐：**2.1.131** / **185**
