@@ -6,6 +6,7 @@ import { getConfig } from './storage.js';
 import { EVENT_SYSTEM_RULE, RANDOM_NPC_RULE, CHARACTER_CALIBRATION_RULE, buildImmersiveActingRule } from './narrative-rules.js';
 import { isPaidImageProvider } from './image-gen.js';
 import { sanitizeHistoryIllustrationMarkers } from './illustration-markers.js';
+import { trimHistoricalActionOptions, buildActionOptionContext } from './action-options.js';
 import { insertAuthorNote, shouldInjectAuthorNote, storyUserTurnCount } from './author-note.js';
 import { resolveWorldBookInjection } from './world-book.js';
 import { assembleCardDescription, buildOffscreenRosterBlock } from './card-modules.js';
@@ -262,7 +263,10 @@ export async function buildMessages(character, historyMessages, userMessage, mem
     const n = Number(character.rawWindowTurns);
     return Number.isFinite(n) ? Math.max(0, Math.min(50, Math.trunc(n))) : 3;
   })();
-  const recentHistory = sliceRecentTurns(historyMessages, rawWindow);
+  // 旧轮菜单剥离，最近一轮完整保留作格式示范与数字映射；不修改本地聊天
+  const recentHistory = trimHistoricalActionOptions(sliceRecentTurns(historyMessages, rawWindow));
+  const latestAssistant = [...recentHistory].reverse().find((msg) => msg.role === 'assistant');
+  const actionOptionContext = metaCommand ? '' : buildActionOptionContext(latestAssistant && latestAssistant.content, userMessage);
 
   for (const msg of recentHistory) {
     // meta 指令轮留在历史里（改剧情类指令才能持续生效），但带元标记，防止 AI 当成剧情对话
@@ -281,8 +285,10 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   const userContent = webSearchRef
     ? (webSearchRef + '\n\n【用户本轮输入】\n' + userMessage)
     : userMessage;
-  // 人设校准紧跟本轮输入，仅存在于 API 请求；元指令不推进扮演，无需注入
-  const requestUserContent = metaCommand ? userContent : userContent + '\n\n' + CHARACTER_CALIBRATION_RULE;
+  // 选项事实边界 + 人设校准紧跟本轮输入，仅存在于 API 请求；元指令无需注入
+  const requestUserContent = metaCommand
+    ? userContent
+    : [userContent, actionOptionContext, CHARACTER_CALIBRATION_RULE].filter(Boolean).join('\n\n');
   messages.push({
     role: 'user',
     content: requestUserContent
