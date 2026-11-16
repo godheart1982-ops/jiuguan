@@ -3,6 +3,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { splitLeadingModules } from '../src/pages/chat/chat-status-fold.js';
+import { normalizeDialogueBold } from '../src/pages/chat/chat-dialogue.js';
+import { marked } from 'marked';
+
+test('对话加粗兼容：引号外加粗统一移到内侧，旧文本也能正常渲染', () => {
+  const old = '**"老婆。"**他在她耳边说。';
+  const normalized = normalizeDialogueBold(old);
+  assert.equal(normalized, '"**老婆。**"他在她耳边说。');
+  const html = marked.parse(normalized, { breaks: true, gfm: true });
+  assert.ok(html.includes('<strong>老婆。</strong>'));
+  assert.ok(!html.includes('**'));
+});
+
+test('对话加粗兼容：支持中文引号、书名号式引号与同台词段多处对话', () => {
+  assert.equal(normalizeDialogueBold('**“现在？”**她问。'), '“**现在？**”她问。');
+  assert.equal(normalizeDialogueBold('**「别走。」**他说。'), '「**别走。**」他说。');
+  assert.equal(
+    normalizeDialogueBold('**"现在？"**她问，**"太晚了。"**他答。'),
+    '"**现在？**"她问，"**太晚了。**"他答。'
+  );
+});
+
+test('对话加粗兼容：正确格式与普通加粗不被改写', () => {
+  const correct = '"**现在？**"她问。';
+  assert.equal(normalizeDialogueBold(correct), correct);
+  assert.equal(normalizeDialogueBold('**他停下脚步。**'), '**他停下脚步。**');
+});
 
 const TYPICAL_REPLY = `>### — 🌍世界信息 —
 \`\`\`

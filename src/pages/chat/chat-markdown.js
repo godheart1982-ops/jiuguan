@@ -3,6 +3,7 @@ import { marked as markedImport } from 'marked';
 import { escapeHtml } from './chat-utils.js';
 import { splitLeadingModules } from './chat-status-fold.js';
 import { normalizePollinationsUrls, transformSeedreamImages, applyImageDisplayMode } from './chat-image.js';
+import { normalizeDialogueBold } from './chat-dialogue.js';
 
 const marked = markedImport || (typeof window !== 'undefined' ? window.marked : null);
 if (marked && marked.setOptions) {
@@ -12,6 +13,7 @@ if (marked && marked.setOptions) {
 export function renderMarkdown(text) {
   if (!text) return '';
   try {
+    text = normalizeDialogueBold(text);
     text = normalizePollinationsUrls(text);
     const html = marked.parse(text, { breaks: true, gfm: true }).replace(/>\n\s*</g, '><');
     return transformSeedreamImages(applyImageDisplayMode(html));
