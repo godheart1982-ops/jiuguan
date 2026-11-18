@@ -526,6 +526,7 @@ export async function selectMemoryRecalls(memory, query = {}) {
   memory.recallLog.push({
     createdAt: new Date().toISOString(),
     userText: String(query.userMessage || ''),
+    actionContext: String(query.actionContext || ''),
     scope,
     turnIds: selections.map((s) => s.turnId),
     levels: selections.map((s) => s.level),

@@ -158,7 +158,10 @@ export function renderMemoryArchivePanel(options) {
         const entry = archive.find((a) => a.turnId === id);
         return entry ? `第${entry.round ?? '—'}轮「${entry.index?.title || ''}」` : id;
       }).join('、');
-      return `<div class="memory-card"><div style="font-size:12px;color:#888;">${escapeHtml(log.createdAt || '')}</div><div style="margin-top:4px;">输入：${escapeHtml(log.userText)}</div><div style="margin-top:4px;color:#c9bda9;">命中：${escapeHtml(titles || '无')}</div>${log.reasons?.length ? `<div style="margin-top:4px;color:#999;">${escapeHtml(log.reasons.join('；'))}</div>` : ''}</div>`;
+      const selectedActions = String(log.actionContext || '').match(/^第\d+条：.+$/gm) || [];
+      const translatedInput = selectedActions.map((line) => line.replace(/^第\d+条：/, '')).join('；');
+      const inputText = translatedInput || String(log.userText || '');
+      return `<div class="memory-card"><div style="font-size:12px;color:#888;">${escapeHtml(log.createdAt || '')}</div><div style="margin-top:4px;">输入：${escapeHtml(inputText)}</div><div style="margin-top:4px;color:#c9bda9;">命中：${escapeHtml(titles || '无')}</div>${log.reasons?.length ? `<div style="margin-top:4px;color:#999;">${escapeHtml(log.reasons.join('；'))}</div>` : ''}</div>`;
     }).join('');
     contentEl.innerHTML = `
       <div class="memory-section">
