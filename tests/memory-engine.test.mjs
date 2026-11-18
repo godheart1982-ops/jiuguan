@@ -4,7 +4,7 @@ import {
   ensureMemoryEngine, emptyMemoryState, turnIdOf, archiveEntryForRound,
   applyMemoryStatePatch, formatMemoryState, formatRecentMemoryIndexes, formatRecalledTurns,
   needsMemoryRawFallback, markMessageMemoryEdited, truncateMemoryForResend, readArchivedTurn,
-  finalizeRecallSelections, chunkRecallCards, runRecallPipeline, withRecallOriginals
+  finalizeRecallSelections, chunkRecallCards, runRecallPipeline
 } from '../src/services/memory-engine.js';
 
 function makeRound(n, userText = `输入${n}`, aiText = `回复${n}`) {
@@ -252,50 +252,6 @@ test('大量索引保持分批粗筛与汇总复选，并传递改写意图', as
   assert.equal(calls.at(-1).query.rewrittenQuery, '回顾主控与林雪的关系关键节点');
   assert.equal(result.rows[0].turnId, 'turn-201');
   assert.equal(result.scope, 'review');
-});
-
-
-test('复选原文：按场景限量，剥离状态栏与行动选项，其余候选保留索引', () => {
-  const rounds = Array.from({ length: 7 }, (_, i) => makeRound(
-    i + 1,
-    `输入${i + 1}`,
-    `正文${i + 1}\n\n\`\`\`\n📅日期：11月18日\n\`\`\`\n\n>### 行动选项\n1. 其他可能`
-  ));
-  const messages = rounds.flatMap((round) => [round.user, round.assistant]);
-  const cards = rounds.map((round) => ({ turnId: round.user.turnId, title: `标题${round.user.round}` }));
-  const rows = cards.map((card) => ({ turnId: card.turnId, level: 'high' }));
-  for (const [scope, limit] of [['normal', 3], ['specific', 4], ['review', 6]]) {
-    const result = withRecallOriginals(cards, rows, scope, messages);
-    assert.equal(result.filter((card) => card.original).length, limit);
-    assert.equal(result.length, cards.length);
-    assert.equal(result[0].original.userText, '输入1');
-    assert.equal(result[0].original.assistantText, '正文1');
-    assert.equal(result[limit].original, undefined);
-  }
-});
-
-test('候选原文只进入既有复选请求，粗筛不携带且调用次数不增加', async () => {
-  const rounds = [makeRound(1), makeRound(2)];
-  const messages = rounds.flatMap((round) => [round.user, round.assistant]);
-  const cards = rounds.map((round) => ({ turnId: round.user.turnId }));
-  const calls = [];
-  await runRecallPipeline(cards, { userMessage: '当时发生了什么', messages }, async (batch, query, phase) => {
-    calls.push({ batch, query, phase });
-    if (phase === 'coarse') {
-      assert.ok(batch.every((card) => !card.original));
-      return {
-        rows: cards.map((card) => ({ turnId: card.turnId, level: 'medium' })),
-        scope: 'specific', rewrittenQuery: '核对当时事件', needsRerank: true
-      };
-    }
-    assert.ok(batch.every((card) => card.original));
-    return {
-      rows: [{ turnId: 'turn-2', level: 'high' }],
-      scope: 'specific', rewrittenQuery: '', needsRerank: false
-    };
-  });
-  assert.equal(calls.length, 2);
-  assert.equal(calls[1].phase, 'final');
 });
 
 

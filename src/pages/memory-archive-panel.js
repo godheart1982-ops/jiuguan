@@ -181,7 +181,7 @@ export function renderMemoryArchivePanel(options) {
       if (!input) return;
       e.target.disabled = true;
       try {
-        const result = await selectMemoryRecalls({ archive, state, recallLog: [] }, { userMessage: input, messages: chat.messages, currentState: state });
+        const result = await selectMemoryRecalls({ archive, state, recallLog: [] }, { userMessage: input, currentState: state });
         contentEl.querySelector('#recall-test-result').innerHTML = result.recalls.length
           ? result.recalls.map((r) => `<div class="memory-card">第${r.entry.round ?? '—'}轮「${escapeHtml(r.entry.index?.title || '')}」<br><span style="color:#999;">${escapeHtml(r.reason)}</span></div>`).join('')
           : '<div class="memory-empty">没有相关历史</div>';

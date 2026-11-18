@@ -120,7 +120,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
           </label>
           <label id="mem-raw-window-label" style="display: flex; align-items: center; gap: 8px; margin: 0; ${character.memoryEnabled !== false ? 'opacity: 0.5;' : ''}">
             <span>携带最近</span>
-            <input type="number" class="form-input" id="mem-raw-window" style="width: 64px;" min="0" max="50" value="${Number.isFinite(Number(character.rawWindowTurns)) ? Math.max(0, Math.min(50, Math.trunc(Number(character.rawWindowTurns)))) : 3}" ${character.memoryEnabled !== false ? 'disabled' : ''}>
+            <input type="number" class="form-input" id="mem-raw-window" style="width: 64px;" min="0" max="50" value="${character.memoryEnabled !== false ? 1 : (Number.isFinite(Number(character.rawWindowTurns)) ? Math.max(0, Math.min(50, Math.trunc(Number(character.rawWindowTurns)))) : 3)}" ${character.memoryEnabled !== false ? 'disabled' : ''}>
             <span>轮对话</span>
           </label>
           <span class="memory-sys-hint">开启时：最近1轮 + 当前状态 + 原文召回；关闭后按设定轮数携带原文</span>
@@ -168,6 +168,8 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   const syncMemoryControls = () => {
     const on = memToggle.checked;
     memRawInput.disabled = on;
+    memRawInput.value = on ? '1' : String(Number.isFinite(Number(character.rawWindowTurns))
+      ? Math.max(0, Math.min(50, Math.trunc(Number(character.rawWindowTurns)))) : 3);
     if (memRawLabel) memRawLabel.style.opacity = on ? '0.5' : '1';
   };
   memToggle.addEventListener('change', async () => {

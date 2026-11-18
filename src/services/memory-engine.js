@@ -4,7 +4,6 @@
 import { getConfig, saveChat } from './storage.js';
 import { sendChat } from './api.js';
 import { resolveMemoryApi, trimAssistantForMemory, extractMemoryCorrections } from './api-memory.js';
-import { stripStatusBlocks } from './world-book.js';
 
 export const RECENT_RAW_TURNS = 1;
 export const MEMORY_ENGINE_VERSION = 'archive-v1';
@@ -463,7 +462,7 @@ turnId 必须照抄。scope 含义：none=当前状态足够或无历史需要�
 4. 同一事件的多轮过程不得全选：普通问题选最直接一轮；长线回顾选起点/转折/结果/最新进展。
 5. 最近一轮已直接携带，不要选排除项。需要前因后果时才设 includeContext=true。
 6. 粗筛时先结合行动选项、当前状态与最近对话，把“她/那件事/还记得吗”等模糊说法改写为 rewrittenQuery；只能明确已有指代，禁止添加未发生的事实。specific/review 必须 needsRerank=true；normal 仅在指代仍不清楚或多个候选相似、需要辨析时设为 true。
-7. ${finalPhase ? '本次是复选：依据已明确检索意图严格精选，不得选择候选卡之外的 turnId。部分候选卡附 original 核验原文：必须据原文确认是否真能回答问题，摘要与原文冲突时以原文为准；只有能直接回答问题的才可标 high。未附原文的候选仍按索引判断，不得因此直接丢弃或降级。' : '本次是粗筛：保留真正相关的候选，但不要为凑数放宽到纯人名或宽泛话题重合。'}
+7. ${finalPhase ? '本次是复选：依据已明确检索意图严格精选，不得选择候选卡之外的 turnId。' : '本次是粗筛：保留真正相关的候选，但不要为凑数放宽到纯人名或宽泛话题重合。'}
 
 【本轮输入】
 ${String(query.userMessage || '')}
@@ -505,31 +504,7 @@ function rowsFromCandidates(rows, candidateCards) {
   return rows.filter((row) => allowed.has(String(row && (row.turnId || row.id) || '')));
 }
 
-/** 只在既有复选请求中附少量清理后的原文；其他候选仍保留索引卡。 */
-export function withRecallOriginals(candidateCards, rows, scope, messages) {
-  if (!Array.isArray(messages) || !messages.length) return candidateCards;
-  const rowInfo = new Map(rows.map((row, index) => [String(row && (row.turnId || row.id) || ''), { row, index }]));
-  const levelRank = (level) => level === 'high' ? 0 : (level === 'medium' ? 1 : 2);
-  const prioritized = candidateCards.map((card) => ({ card, info: rowInfo.get(card.turnId) }))
-    .filter((item) => item.info && item.info.row.level !== 'low')
-    .sort((a, b) => levelRank(a.info.row.level) - levelRank(b.info.row.level) || a.info.index - b.info.index);
-  const limit = scope === 'review' ? 6 : (scope === 'specific' ? 4 : 3);
-  const detailed = new Set(prioritized.slice(0, limit).map((item) => item.card.turnId));
-  return candidateCards.map((card) => {
-    if (!detailed.has(card.turnId)) return card;
-    const raw = readArchivedTurn(messages, card.turnId);
-    if (!raw) return card;
-    return {
-      ...card,
-      original: {
-        userText: raw.userText,
-        assistantText: stripStatusBlocks(raw.assistantText).replace(/\n{3,}/g, '\n\n').trim()
-      }
-    };
-  });
-}
-
-/** 查询改写并入粗筛；普通且明确时一次完成，复杂回忆或大量索引才复选并核验少量原文。 */
+/** 查询改写并入粗筛；普通且明确时一次完成，复杂回忆或大量索引才复选。 */
 export async function runRecallPipeline(cards, query, request) {
   const batches = chunkRecallCards(cards);
   let scope = 'normal';
@@ -544,8 +519,7 @@ export async function runRecallPipeline(cards, query, request) {
     const candidateCards = recallCandidateCards(cards, rows);
     const needsRerank = result.needsRerank || scope === 'specific' || scope === 'review';
     if (candidateCards.length && needsRerank) {
-      const finalCards = withRecallOriginals(candidateCards, rows, scope, query.messages);
-      const merged = await request(finalCards, { ...query, recallScope: scope, rewrittenQuery }, 'final');
+      const merged = await request(candidateCards, { ...query, recallScope: scope, rewrittenQuery }, 'final');
       rows = rowsFromCandidates(merged.rows, candidateCards);
       scope = merged.scope;
       rewrittenQuery = merged.rewrittenQuery || rewrittenQuery;
@@ -561,8 +535,7 @@ export async function runRecallPipeline(cards, query, request) {
     rewrittenQuery = primary.rewrittenQuery || successful.find((r) => r.rewrittenQuery)?.rewrittenQuery || '';
     const candidateCards = recallCandidateCards(cards, rows);
     if (candidateCards.length) {
-      const finalCards = withRecallOriginals(candidateCards, rows, scope, query.messages);
-      const merged = await request(finalCards, { ...query, recallScope: scope, rewrittenQuery }, 'final');
+      const merged = await request(candidateCards, { ...query, recallScope: scope, rewrittenQuery }, 'final');
       rows = rowsFromCandidates(merged.rows, candidateCards);
       scope = merged.scope;
       rewrittenQuery = merged.rewrittenQuery || rewrittenQuery;

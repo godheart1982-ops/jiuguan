@@ -168,7 +168,6 @@ export function createSendController(deps) {
             const latest = pastRounds[pastRounds.length - 1] || null;
             const result = await selectMemoryRecalls(chat.memory, {
               userMessage: userMsg.content,
-              messages: chat.messages,
               currentState: chat.memory.state,
               recentUser: latest ? latest.user.content : '',
               recentAssistant: latest ? latest.assistant.content : '',

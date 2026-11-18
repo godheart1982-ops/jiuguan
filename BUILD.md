@@ -74,8 +74,8 @@ npm run build:android:apk      # 仅打包 APK
 也可手动改 `android/app/build.gradle`：
 
 ```gradle
-versionCode 195        // 整数，每版 +1（覆盖安装时系统据此判断新旧）
-versionName "2.1.141"   // 显示给用户的版本号
+versionCode 196        // 整数，每版 +1（覆盖安装时系统据此判断新旧）
+versionName "2.1.142"   // 显示给用户的版本号
 ```
 
 ### 数据存储
