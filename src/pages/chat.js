@@ -19,7 +19,7 @@ import { createMessageListController } from './chat/chat-message-list.js';
 import { createSendController } from './chat/chat-send.js';
 import { normalizeAuthorNote } from '../services/author-note.js';
 import { beginNewSwipe, activateSwipe, discardInactiveSwipes, syncActiveSwipe, activeSwipeIndex, imagePathsLostByDiscard } from './chat/chat-swipes.js';
-import { syncPendingRecalls } from '../services/api-memory.js';
+import { turnIdOf, truncateMemoryForResend, emptyMemoryState } from '../services/memory-engine.js';
 
 
 export async function renderChat(container, characterId, chatId) {
@@ -118,7 +118,7 @@ export async function renderChat(container, characterId, chatId) {
   toolsPanel.id = 'chat-tools-panel';
   toolsPanel.innerHTML = `
     <div class="chat-tools-grid">
-      <button class="chat-tool-btn" id="btn-memory" title="编辑长期记忆">🧠 记忆</button>
+      <button class="chat-tool-btn" id="btn-memory" title="编辑当前状态与原文记忆">🧠 记忆</button>
       <button class="chat-tool-btn" id="btn-author-note" title="作者注释：不进记录，按深度插进每次请求">📝 作者注释</button>
       <button class="chat-tool-btn" id="btn-new-chat" title="新建对话">＋ 新对话</button>
       <button class="chat-tool-btn" id="btn-refresh-chat" title="刷新当前对话（重新读取最新内容）">🔄 刷新</button>
@@ -459,6 +459,7 @@ export async function renderChat(container, characterId, chatId) {
       round: isMeta ? null : (currentChat.roundCounter = (Number.isFinite(currentChat.roundCounter) ? currentChat.roundCounter : 0) + 1),
       ...(isMeta ? { meta: true } : {})
     };
+    turnIdOf({ user: userMsg }); // 永久轮次 ID：编辑时间戳也不会改变记忆指向
     currentChat.messages.push(userMsg);
     appendMessage(messagesContainer, userMsg, null, currentChat, handleRefresh, renderMessages, handleEditResend, handleSwipe, handleBranch);
     input.value = '';
@@ -532,18 +533,6 @@ export async function renderChat(container, characterId, chatId) {
     const msg = currentChat.messages[assistantIndex];
     const next = activeSwipeIndex(msg) + dir;
     if (!activateSwipe(msg, next)) return;
-    if (currentChat.memory) {
-      const changed = syncPendingRecalls(currentChat.memory, msg.content);
-      if (changed) {
-        const pending = currentChat.memory.pendingRecalls;
-        showMemoryStatus(
-          pending && pending.length
-            ? '已按当前稿调取远期记忆 #' + pending.join('、#') + '（下轮生效）'
-            : '已按当前稿取消记忆调取',
-          'info'
-        );
-      }
-    }
     await saveChat(currentChat);
     renderMessages(false);
   }
@@ -599,6 +588,7 @@ export async function renderChat(container, characterId, chatId) {
 
       msg.content = newContent;
       msg.timestamp = new Date().toISOString();
+      truncateMemoryForResend(currentChat, msg);
       // 删除该用户消息之后的所有消息（旧的 AI 回复）
       currentChat.messages.splice(userIndex + 1);
 
@@ -630,10 +620,14 @@ export async function renderChat(container, characterId, chatId) {
 
   // 重置对话
   document.getElementById('btn-reset-chat').addEventListener('click', async () => {
-    if (!confirm('确定要重置当前对话吗？所有聊天记录将被清除，并重新输出开场白。长期记忆会保留，短期记忆会清空。')) return;
+    if (!confirm('确定要重置当前对话吗？所有聊天记录、原文索引与当前状态将被清除，并重新输出开场白。')) return;
 
     currentChat.messages = [];
     currentChat.memory.shortTerm = [];
+    currentChat.memory.archive = [];
+    currentChat.memory.state = emptyMemoryState();
+    currentChat.memory.recallLog = [];
+    currentChat.memory.engineStartedAt = new Date().toISOString();
     delete currentChat.memory.shortTermBatchCounter;
     if (character.greeting) {
       currentChat.messages.push({

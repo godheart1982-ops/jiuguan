@@ -185,7 +185,7 @@ src/pages/settings/
 ```
 src/pages/chat.js                     # 聊天页组装：事件绑定、工具面板、联网挂载（~540 行，原 ~2165）
 src/pages/chat/
-  ├── chat-send.js                    # 发送 / 流式 / 自动补全 / 记忆总结 catch-up（D5）
+  ├── chat-send.js                    # 发送 / 流式 / 自动补全 / 原文记忆召回与后台整理（D5）
   ├── chat-utils.js
   ├── chat-image.js
   ├── chat-markdown.js

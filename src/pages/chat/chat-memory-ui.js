@@ -17,8 +17,8 @@ export function createMemoryStatus(memoryStatusEl) {
 
   function showMemoryRetryBar(retryFn) {
     memoryStatusEl.innerHTML = `
-      <span>⚠ 记忆总结失败</span>
-      <button class="btn btn-ghost btn-small" id="btn-memory-retry" style="margin-left:8px; padding:2px 8px;">🔄 手动总结</button>
+      <span>⚠ 记忆整理失败</span>
+      <button class="btn btn-ghost btn-small" id="btn-memory-retry" style="margin-left:8px; padding:2px 8px;">🔄 重试整理</button>
       <button class="btn btn-ghost btn-small" id="btn-memory-skip" style="margin-left:4px; padding:2px 8px;">跳过</button>
     `;
     memoryStatusEl.className = 'memory-status error';

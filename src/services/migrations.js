@@ -192,6 +192,18 @@ const CHAT_STEPS = [
     }
   },
   {
+    name: '原文召回记忆结构',
+    migrate(chat) {
+      if (!Array.isArray(chat.memory.archive)) chat.memory.archive = [];
+      if (!chat.memory.state || typeof chat.memory.state !== 'object') {
+        chat.memory.state = { scene: '', characters: [], promises: [], events: [], intel: [], asOfTurn: '', stale: false };
+      }
+      if (!Array.isArray(chat.memory.recallLog)) chat.memory.recallLog = [];
+      if (!chat.memory.engineStartedAt) chat.memory.engineStartedAt = new Date().toISOString();
+      chat.memory.engine = 'archive-v1';
+    }
+  },
+  {
     name: 'facts 归一化与旧数据回填',
     migrate(chat) {
       const hadFacts =

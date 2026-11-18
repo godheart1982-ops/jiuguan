@@ -6,11 +6,11 @@ import { THINKING_PREFILL, buildMessages } from '../../services/api-messages.js'
 import { resolveCardPrompt } from '../../services/prompt-library.js';
 import { sendChat, sendChatStream } from '../../services/api.js';
 import { setRequestSessionId } from '../../services/api-headers.js';
+import { resolveMemoryApi } from '../../services/api-memory.js';
 import {
-  summarizeTurn, trimAssistantForMemory, resolveMemoryApi,
-  applyTurnFactsToMemory, RAW_WINDOW_TURNS,
-  extractMemoryCorrections, ensureLongTermMeta, syncPendingRecalls
-} from '../../services/api-memory.js';
+  selectMemoryRecalls, catchUpMemoryArchive, needsMemoryRawFallback,
+  RECENT_RAW_TURNS, turnIdOf
+} from '../../services/memory-engine.js';
 import { updateGenerationForeground } from '../../services/foreground.js';
 import { ensurePollinationsAnchors } from '../../services/image-gen.js';
 import { countTokens } from '../../utils/tokenizer.js';
@@ -19,12 +19,10 @@ import { normalizePollinationsUrls, extractImageSeeds, hydrateGeneratedImages } 
 import { renderMarkdown, renderAssistantDisplay } from './chat-markdown.js';
 import { appendMessage } from './chat-message-ui.js';
 import {
-  activeSwipeIndex, syncActiveSwipe, rollbackNewSwipe,
-  markActiveSwipeAborted, readSwipeContent
+  activeSwipeIndex, syncActiveSwipe, rollbackNewSwipe, markActiveSwipeAborted
 } from './chat-swipes.js';
 import {
-  getAllRounds, getLeadingGreeting, getLastOutputHeading,
-  extractSceneDate, maybeCondenseLongTerm
+  getAllRounds, getLeadingGreeting, getLastOutputHeading
 } from './chat-memory-helpers.js';
 
 /**
@@ -153,6 +151,36 @@ export function createSendController(deps) {
       await updateGenerationForeground({ title: 'AI 正在回复', text: '请耐心等待…' });
 
       const history = chat.messages.slice(0, userIndex);
+      let recalledTurns = [];
+      let rawWindowOverride = RECENT_RAW_TURNS;
+      if (character.memoryEnabled !== false && !isMeta && chat.memory) {
+        const pastRounds = getAllRounds(history).filter((r) => !r.user.meta);
+        // 上一轮若还没来得及后台入库，临时多带一轮原文，不阻塞发送
+        if (needsMemoryRawFallback(chat.memory, pastRounds)) rawWindowOverride = RECENT_RAW_TURNS + 1;
+        const excludedTurnIds = pastRounds.slice(-rawWindowOverride).map(turnIdOf);
+        const hasIndex = Array.isArray(chat.memory.archive) && chat.memory.archive.some((a) => a && a.index && !excludedTurnIds.includes(a.turnId));
+        if (hasIndex) {
+          try {
+            showMemoryStatus('正在查找相关历史对话…', 'info');
+            const latest = pastRounds[pastRounds.length - 1] || null;
+            const result = await selectMemoryRecalls(chat.memory, {
+              userMessage: userMsg.content,
+              currentState: chat.memory.state,
+              recentUser: latest ? latest.user.content : '',
+              recentAssistant: latest ? latest.assistant.content : '',
+              excludeTurnIds: excludedTurnIds
+            });
+            recalledTurns = result.recalls;
+            await saveChat(chat).catch(() => {});
+            if (recalledTurns.length) {
+              showMemoryStatus('已召回历史轮次：' + recalledTurns.map((r) => `第${r.entry.round ?? '—'}轮`).join('、'), 'success');
+            }
+          } catch (e) {
+            console.warn('历史记忆召回失败，继续使用当前状态与最近原文:', e);
+            showMemoryStatus('本轮记忆召回失败，已按当前状态继续', 'warning');
+          }
+        }
+      }
       const messages = await buildMessages(
         character,
         history,
@@ -163,7 +191,9 @@ export function createSendController(deps) {
           webSearchRef: options.webSearchRef || '',
           metaCommand: isMeta,
           plot: chat.plot || null,
-          authorNote: chat.authorNote || null
+          authorNote: chat.authorNote || null,
+          recalledTurns,
+          rawWindowOverride
         }
       );
 
@@ -247,7 +277,6 @@ export function createSendController(deps) {
           onError: async (message) => {
             assistantMsg.content = `（生成失败：${message}）`;
             syncActiveSwipe(assistantMsg);
-            if (!isMeta && chat.memory) syncPendingRecalls(chat.memory, assistantMsg.content);
             if (contentEl) {
               contentEl.classList.remove('streaming-cursor');
               contentEl.innerHTML = renderMarkdown(assistantMsg.content);
@@ -303,20 +332,6 @@ export function createSendController(deps) {
                   }
                 } catch (e) {
                   console.warn('补全缺失模块失败:', e);
-                }
-              }
-
-              // 远期记忆调取：AI 末尾标记的「记忆调取：#N」落盘，下一轮 buildMessages 一次性注入该条全文；
-              // 本轮若无新请求则清除已消费的 pendingRecalls（一次性注入，不常驻）。元指令轮不解析。
-              // 按当前这一稿计算；换稿时会再算一次。
-              if (!isMeta && chat.memory && Array.isArray(chat.memory.longTerm)) {
-                const recallsChanged = syncPendingRecalls(chat.memory, readSwipeContent(assistantMsg, lockedSwipe));
-                if (recallsChanged) {
-                  await saveChat(chat).catch(() => {});
-                  const pending = chat.memory.pendingRecalls;
-                  if (pending && pending.length) {
-                    showMemoryStatus('已调取远期记忆 #' + pending.join('、#') + '（下轮生效）', 'info');
-                  }
                 }
               }
 
@@ -386,189 +401,31 @@ export function createSendController(deps) {
                 });
               }
 
-              // 生成短期记忆：入后台串行队列，不再 await——发送按钮随 resolve 立即恢复，
-              // 总结在后台按 catch-up 顺序补全所有未总结的窗口外轮次（直到 index U-1-3）。元指令轮不总结
-              const shouldSummarize = character.memoryEnabled !== false && !isMeta;
-              if (shouldSummarize) {
+              // 最新一轮仍可刷新，不入库；只整理已经退出最近一轮窗口的定稿
+              const shouldArchive = character.memoryEnabled !== false && !isMeta;
+              if (shouldArchive) {
                 const memoryChatId = chat.id;
                 enqueueMemoryTask(async () => {
-                // 任务真正执行时重新取当前会话（用户可能已切换对话），身份不符则跳过，
-                // 跳过的轮次不丢：回到该对话后的下一次回复会经 catch-up 补总结
-                const chat = getChat();
-                if (!chat || chat.id !== memoryChatId) return;
-                // 老长期记忆一次性升级：补目录标题与召回关键词（副 API 一次，全部标记 metaDone 后不再触发）
-                if (Array.isArray(chat.memory.longTerm) && chat.memory.longTerm.some(lt => lt && lt.content && lt.metaDone !== true)) {
+                  const fresh = getChat();
+                  if (!fresh || fresh.id !== memoryChatId) return;
                   try {
-                    showMemoryStatus('正在升级长期记忆目录…', 'info');
-                    await ensureLongTermMeta(chat.memory);
-                    await saveChat(chat).catch(() => {});
+                    const rounds = getAllRounds(fresh.messages).filter((r) => !r.user.meta);
+                    await catchUpMemoryArchive(fresh, character, rounds, {
+                      greeting: getLeadingGreeting(fresh.messages),
+                      onStatus: showMemoryStatus
+                    });
                   } catch (e) {
-                    console.warn('长期记忆目录升级失败:', e);
-                  }
-                }
-                // 摘要上下文：人名参照 + 最近两条短期摘要（指代消解用；随 catch-up 推进自动滚动）
-                // + 记忆修正行（从当轮回复【全文】机械提取——裁切后的总结文本可能已丢掉末尾修正行）
-                // + 约定/关系/情报当前清单（全量重写：AI 拿着旧清单逐条核对，对齐文本后整体替换）
-                // + 世界动态当前清单（增量上报：AI 只报有变化的条目，App 按事件名合并、同名保留最新）
-                const memoryContext = (assistantFullContent) => ({
-                  characterName: character.name || '',
-                  mainControlName: (character.mainControl && character.mainControl.name) || '',
-                  previousSummaries: chat.memory.shortTerm.slice(-2),
-                  supplement: (chat.memory && chat.memory.supplement) || '',
-                  corrections: extractMemoryCorrections(assistantFullContent || ''),
-                  openPromises: (((chat.memory.facts || {}).promises) || []).filter(p => p && p.status !== 'done'),
-                  currentRelations: (((chat.memory.facts || {}).relations) || []),
-                  currentIntel: (((chat.memory.facts || {}).intel) || []),
-                  currentWorldEvents: (((chat.memory.facts || {}).worldEvents) || [])
-                });
-                // meta 指令轮不参与总结：过滤后再做窗口/补总结计算，保证轮次与窗口都是纯剧情轮
-                const allRounds = getAllRounds(chat.messages).filter(r => !r.user.meta);
-                const U = allRounds.length;
-                const normalTargetIdx = U - 1 - RAW_WINDOW_TURNS;
-                if (normalTargetIdx >= 0) {
-                  // 已总结的时间戳：短期记忆中的 + 已压缩进长期记忆的（防止压缩后 shortTerm 清空导致重复总结）
-                  const summarizedTs = new Set(chat.memory.shortTerm.map(s => s.turnTimestamp));
-                  const longTermSourceTs = new Set(
-                    chat.memory.longTerm.flatMap(lt => lt.sourceTimestamps || [])
-                  );
-                  const longTermSourceRounds = new Set(
-                    chat.memory.longTerm.flatMap(lt => lt.sourceRounds || [])
-                  );
-
-                  // 计算 catch-up 起始位置，避免重复总结已压缩进长期记忆的轮次
-                  let catchUpStartIdx = 0;
-                  if (chat.memory.longTerm.length > 0) {
-                    const allSourceRounds = chat.memory.longTerm
-                      .flatMap(lt => lt.sourceRounds || [])
-                      .filter(r => Number.isFinite(r));
-
-                    if (allSourceRounds.length > 0) {
-                      // 新数据：sourceRounds 有效 → 找到最大已压缩轮次，从其后一轮开始
-                      const maxCondensedRound = Math.max(...allSourceRounds);
-                      const firstUncondensed = allRounds.findIndex(r =>
-                        !Number.isFinite(r.user.round) || r.user.round > maxCondensedRound
-                      );
-                      catchUpStartIdx = firstUncondensed >= 0 ? firstUncondensed : normalTargetIdx;
-                    } else if (chat.memory.shortTerm.length > 0) {
-                      // 旧数据（sourceRounds 为空）：用短期记忆最早条目作边界
-                      const shortTermTsSet = new Set(chat.memory.shortTerm.map(s => s.turnTimestamp).filter(Boolean));
-                      const firstShortIdx = allRounds.findIndex(r => shortTermTsSet.has(r.user.timestamp));
-                      if (firstShortIdx > 0) catchUpStartIdx = firstShortIdx;
-                    } else {
-                      // 旧数据 + 短期记忆也为空：无法判断边界，只处理当前目标轮次
-                      catchUpStartIdx = normalTargetIdx;
-                    }
-                  }
-
-                  let anySummarized = false;
-                  let catchUpFailed = false;
-                  // 剧情日期兜底：状态栏日期解析失败时沿用最近已知剧情日期，
-                  // 不用现实世界当天——避免设定在过去/未来时间线的故事被盖上真实日期
-                  let lastKnownDate = chat.memory.shortTerm.length
-                    ? (chat.memory.shortTerm[chat.memory.shortTerm.length - 1].date || '')
-                    : '';
-                  if (!lastKnownDate) lastKnownDate = new Date().toISOString().slice(0, 10);
-
-                  for (let i = catchUpStartIdx; i <= normalTargetIdx; i++) {
-                    const target = allRounds[i];
-                    // 已在短期记忆 / 已压缩进长期记忆（按 timestamp 或轮次号双重校验），跳过
-                    if (
-                      summarizedTs.has(target.user.timestamp) ||
-                      longTermSourceTs.has(target.user.timestamp) ||
-                      (Number.isFinite(target.user.round) && longTermSourceRounds.has(target.user.round))
-                    ) continue;
-
-                    const isCatchUp = i < normalTargetIdx;
-                    showMemoryStatus(
-                      isCatchUp ? `正在补全记忆（第 ${target.user.round ?? i + 1} 轮）...` : '正在生成短期记忆...',
-                      'info'
-                    );
-
-                    // 在 try 外声明，确保 catch 里也能拿到（用于重试 payload）
-                    let assistantForMemory = '';
-                    let sceneDate = extractSceneDate(target.assistant.content) || lastKnownDate;
-                    lastKnownDate = sceneDate;
-                    try {
-                      assistantForMemory = trimAssistantForMemory(target.assistant.content);
-                      // 第 1 轮把开场白并进记忆
-                      if (i === 0) {
-                        const greeting = getLeadingGreeting(chat.messages);
-                        if (greeting) assistantForMemory = `【开场白】\n${greeting}\n\n【本轮回复】\n${assistantForMemory}`;
-                      }
-                      const short = await summarizeTurn(
-                        target.user.content,
-                        assistantForMemory,
-                        sceneDate,
-                        memoryContext(target.assistant.content)
-                      );
-                      const exists = chat.memory.shortTerm.some(s => s.turnTimestamp === target.user.timestamp);
-                      if (!exists) {
-                        // 散文进 shortTerm；事实备忘（含 worldEvents）单独合并，不随 shortTerm 清空而丢
-                        const { promises, relations, worldEvents, intel, ...shortRow } = short;
-                        chat.memory.shortTerm.push({
-                          date: shortRow.date,
-                          content: shortRow.content,
-                          turnTimestamp: target.user.timestamp,
-                          round: target.user.round ?? null
-                        });
-                        applyTurnFactsToMemory(chat.memory, {
-                          content: short.content,
-                          promises,
-                          relations,
-                          worldEvents,
-                          intel
-                        }, (character.mainControl && character.mainControl.name) || '');
-                        summarizedTs.add(target.user.timestamp);
-                        anySummarized = true;
-                      }
-                      await saveChat(chat).catch(() => {});
-                    } catch (e) {
-                      console.warn('短期记忆生成失败:', e);
-                      catchUpFailed = true;
-                      const retryUser = target.user.content;
-                      const retryAi = assistantForMemory;
-                      const retryFullContent = target.assistant.content;
-                      const retryDate = sceneDate;
-                      const retryTimestamp = target.user.timestamp;
-                      const retryRound = target.user.round;
-                      showMemoryRetryBar(async () => {
-                        showMemoryStatus('正在重试记忆总结...', 'info');
-                        const short = await summarizeTurn(
-                          retryUser,
-                          retryAi,
-                          retryDate,
-                          memoryContext(retryFullContent)
-                        );
-                        const existsRetry = chat.memory.shortTerm.some(s => s.turnTimestamp === retryTimestamp);
-                        if (!existsRetry) {
-                          const { promises, relations, worldEvents, intel, ...shortRow } = short;
-                          chat.memory.shortTerm.push({
-                            date: shortRow.date,
-                            content: shortRow.content,
-                            turnTimestamp: retryTimestamp,
-                            round: retryRound ?? null
-                          });
-                          applyTurnFactsToMemory(chat.memory, {
-                            content: short.content,
-                            promises,
-                            relations,
-                            worldEvents,
-                            intel
-                          }, (character.mainControl && character.mainControl.name) || '');
-                        }
-                        await saveChat(chat).catch(() => {});
-                        showMemoryStatus('短期记忆已生成', 'success');
-                        await maybeCondenseLongTerm(chat, showMemoryStatus);
+                    console.warn('原文记忆整理失败:', e);
+                    showMemoryStatus('记忆整理失败，原文已保留，可在记忆编辑器重试', 'warning');
+                    showMemoryRetryBar(async () => {
+                      const latest = getChat();
+                      const rounds = getAllRounds(latest.messages).filter((r) => !r.user.meta);
+                      await catchUpMemoryArchive(latest, character, rounds, {
+                        greeting: getLeadingGreeting(latest.messages),
+                        onStatus: showMemoryStatus
                       });
-                      break; // 失败时中断循环，等用户手动重试
-                    }
+                    });
                   }
-
-                  if (!catchUpFailed && anySummarized) {
-                    showMemoryStatus('短期记忆已生成', 'success');
-                    await maybeCondenseLongTerm(chat, showMemoryStatus);
-                  }
-                }
                 });
               }
 
@@ -577,7 +434,6 @@ export function createSendController(deps) {
               markActiveSwipeAborted(assistantMsg);
               assistantMsg.content = assistantMsg.content || '（已停止生成）';
               syncActiveSwipe(assistantMsg);
-              if (!isMeta && chat.memory) syncPendingRecalls(chat.memory, assistantMsg.content);
               if (contentEl) {
                 contentEl.innerHTML = renderMarkdown(assistantMsg.content);
               }
@@ -597,7 +453,6 @@ export function createSendController(deps) {
           lastMsg.content = `（生成失败：${error.message || String(error)}）`;
         }
         syncActiveSwipe(lastMsg);
-        if (!isMeta && chat.memory) syncPendingRecalls(chat.memory, lastMsg.content);
         renderMessages();
       } else {
         const errMsg = {

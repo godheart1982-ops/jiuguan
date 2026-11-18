@@ -58,3 +58,17 @@ test('buildBranchedChat: 越界下标收敛；空对话报错', () => {
   assert.equal(buildBranchedChat(source, -5, 'x', 'now').messages.length, 1);
   assert.throws(() => buildBranchedChat({ messages: [] }, 0, 'x', 'now'));
 });
+
+test('buildBranchedChat: 原文记忆按分支截断并恢复当时状态快照', () => {
+  const source = makeChat();
+  source.memory.archive = [
+    { turnId: 'turn-t1-r1', stateAfter: { scene: '家里', characters: [], asOfTurn: 'turn-t1-r1' } },
+    { turnId: 'turn-t3-r2', stateAfter: { scene: '公司', characters: [], asOfTurn: 'turn-t3-r2' } }
+  ];
+  source.memory.state = source.memory.archive[1].stateAfter;
+  const branched = buildBranchedChat(source, 2, 'new-id', 'now');
+  assert.equal(branched.memory.archive.length, 1);
+  assert.equal(branched.memory.state.scene, '家里');
+  assert.equal(source.memory.archive.length, 2);
+  assert.equal(source.memory.state.scene, '公司');
+});

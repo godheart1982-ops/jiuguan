@@ -6,7 +6,7 @@ import { renderMarkdown, renderAssistantDisplay } from './chat-markdown.js';
 import {
   swipeCount, activeSwipeIndex, isActiveSwipeAborted, syncActiveSwipe
 } from './chat-swipes.js';
-import { syncPendingRecalls } from '../../services/api-memory.js';
+import { markMessageMemoryEdited } from '../../services/memory-engine.js';
 
 export async function createNewChat(character) {
   const now = new Date().toISOString();
@@ -161,6 +161,7 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
         if (!confirm('确定要删除这条消息吗？')) return;
         const index = currentChat.messages.findIndex(m => m.timestamp === msg.timestamp && m.role === msg.role);
         if (index !== -1) {
+          if (currentChat.memory) markMessageMemoryEdited(currentChat, msg);
           currentChat.messages.splice(index, 1);
           await saveChat(currentChat);
           if (onUpdate) onUpdate();
@@ -242,7 +243,7 @@ export function openMessageEditor(msg, wrapper, currentChat) {
     const newContent = textarea.value;
     msg.content = newContent;
     syncActiveSwipe(msg);
-    if (currentChat.memory) syncPendingRecalls(currentChat.memory, msg.content);
+    if (currentChat.memory) markMessageMemoryEdited(currentChat, msg);
     msg.timestamp = new Date().toISOString();
 
     const contentEl = wrapper.querySelector('.message-content');

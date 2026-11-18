@@ -1,4 +1,4 @@
-// 记忆编辑器：🧠 全屏弹窗；页签两行（短/长/事实 | 种子/锚点）。
+// 记忆编辑器：🧠 全屏弹窗；当前状态/对话索引/召回记录 + 生图/补充/剧情辅助页签。
 // 自包含模块——自己建遮罩、绑事件、保存，输入仅 (chat, character, onUpdate)，与聊天页状态零耦合。
 // migrateMemory 也住在这里：它既被编辑器调用，也被聊天页打开旧对话时做结构迁移。
 import { saveCharacter, saveChat, saveAnchorRefImage, deleteAnchorRefImage, getGeneratedImageDataUrl, getPlotPresets, savePlotPreset, deletePlotPreset } from '../services/storage.js';
@@ -16,6 +16,8 @@ import { migrateChat } from '../services/migrations.js';
 import { promptText } from '../utils/prompt-dialog.js';
 import { countTokens } from '../utils/tokenizer.js';
 import { openBigTextEditor } from '../utils/big-editor.js';
+import { renderMemoryArchivePanel } from './memory-archive-panel.js';
+import { emptyMemoryState } from '../services/memory-engine.js';
 
 // 参考图上传前压缩：最长边 ≤1024px 转 jpeg（脸特征足够，省存储省上传）
 function resizeImageDataUrl(dataUrl, maxDim = 1024) {
@@ -51,7 +53,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   const existing = document.querySelector('.memory-editor-overlay');
   if (existing) existing.remove();
 
-  // 确保 memory 结构为新版长期记忆
+  // 确保 memory 具备原文档案、状态账本和召回记录结构
   migrateMemory(chat);
 
   // 使用本地可变副本，避免依赖 DOM 收集时出现的浏览器/时序问题
@@ -60,6 +62,10 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   // 事实备忘（本地副本）；mcName：主控真名，关系端点归一化用（「主控」→真名）
   const mcName = (character && character.mainControl && character.mainControl.name) || '';
   let factsEdit = normalizeFacts(chat.memory.facts, mcName);
+  // 原文召回型记忆本地副本：状态账本 / 轮次索引 / 召回记录
+  let stateEdit = JSON.parse(JSON.stringify(chat.memory.state || emptyMemoryState()));
+  let archiveEdit = JSON.parse(JSON.stringify(chat.memory.archive || []));
+  let recallLogEdit = JSON.parse(JSON.stringify(chat.memory.recallLog || []));
   // 免费生图记忆（本地副本，保存时写回 chat.seedArchive；{角色名: {seed, anchor}} 形态）
   let seedArchiveEdit = Object.fromEntries(
     Object.entries(chat.seedArchive || {}).map(([k, v]) => [k, (v && typeof v === 'object')
@@ -95,8 +101,8 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   })();
   // 剧情线库（全局预设，打开后异步加载）
   let plotPresets = {};
-  // 当前激活的记忆页签：'short' 短期 / 'long' 长期 / 'facts' 事实备忘 / 'seeds' 插图种子 / 'anchors' 外貌身材锚点 / 'supplement' 补充设定 / 'plot' 剧情线
-  let activeTab = 'short';
+  // 主记忆页签：state 当前状态 / archive 对话索引 / recalls 召回记录；其余为既有辅助页签
+  let activeTab = 'state';
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay memory-editor-overlay';
@@ -117,13 +123,13 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             <input type="number" class="form-input" id="mem-raw-window" style="width: 64px;" min="0" max="50" value="${Number.isFinite(Number(character.rawWindowTurns)) ? Math.max(0, Math.min(50, Math.trunc(Number(character.rawWindowTurns)))) : 3}" ${character.memoryEnabled !== false ? 'disabled' : ''}>
             <span>轮对话</span>
           </label>
-          <span class="memory-sys-hint">关闭记忆后不再总结/注入，仅按设定轮数携带原文</span>
+          <span class="memory-sys-hint">开启时：最近1轮 + 当前状态 + 原文召回；关闭后按设定轮数携带原文</span>
         </div>
         <div class="memory-tabs">
           <div class="memory-tabs-row">
-            <button class="btn btn-primary btn-small memory-tab-btn" id="tab-short" data-tab="short">短期记忆</button>
-            <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-long" data-tab="long">长期记忆</button>
-            <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-facts" data-tab="facts">事实备忘</button>
+            <button class="btn btn-primary btn-small memory-tab-btn" id="tab-short" data-tab="state">当前状态</button>
+            <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-long" data-tab="archive">对话索引</button>
+            <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-facts" data-tab="recalls">召回记录</button>
           </div>
           <div class="memory-tabs-row">
             <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-seeds" data-tab="seeds">免费生图记忆</button>
@@ -196,19 +202,42 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   }
 
   function updateCounter() {
-    const text = JSON.stringify({ shortTerm: shortTermMemories, longTerm: longTermMemories, facts: factsEdit, supplement: supplementEdit });
+    const text = JSON.stringify({ state: stateEdit, archive: archiveEdit, recallLog: recallLogEdit, supplement: supplementEdit });
     const tokens = countTokens(text);
     counterEl.textContent = `${tokens} tokens`;
   }
 
-  function factsCount() {
-    return (factsEdit.promises?.length || 0)
-      + (factsEdit.relations?.length || 0)
-      + (factsEdit.worldEvents?.length || 0)
-      + (factsEdit.intel?.length || 0);
-  }
-
   function renderContent() {
+    if (activeTab === 'state' || activeTab === 'archive' || activeTab === 'recalls') {
+      const primaryTabs = [
+        ['tab-short', 'state', `状态（${stateEdit.characters.length}）`],
+        ['tab-long', 'archive', `索引（${archiveEdit.length}）`],
+        ['tab-facts', 'recalls', `召回（${recallLogEdit.length}）`]
+      ];
+      for (const [id, tab, label] of primaryTabs) {
+        const btn = document.getElementById(id);
+        btn.textContent = label;
+        btn.className = 'btn btn-small memory-tab-btn ' + (activeTab === tab ? 'btn-primary' : 'btn-ghost');
+      }
+      renderMemoryArchivePanel({
+        tab: activeTab,
+        state: stateEdit,
+        archive: archiveEdit,
+        recallLog: recallLogEdit,
+        contentEl,
+        chat,
+        character,
+        onChange: updateCounter,
+        onData: (state, archive, logs) => {
+          stateEdit = JSON.parse(JSON.stringify(state));
+          archiveEdit = JSON.parse(JSON.stringify(archive));
+          recallLogEdit = JSON.parse(JSON.stringify(logs || []));
+        },
+        rerender: renderContent
+      });
+      updateCounter();
+      return;
+    }
     const shortTerm = shortTermMemories;
     const longTerm = longTermMemories;
 
@@ -257,16 +286,16 @@ export async function openMemoryEditor(chat, character, onUpdate) {
     const supplementTabBtn = document.getElementById('tab-supplement');
     const plotTabBtn = document.getElementById('tab-plot');
     if (shortTabBtn && longTabBtn && factsTabBtn && seedsTabBtn && anchorsTabBtn && supplementTabBtn && plotTabBtn) {
-      shortTabBtn.textContent = `短期（${shortTerm.length}）`;
-      longTabBtn.textContent = `长期（${longTerm.length}）`;
-      factsTabBtn.textContent = `事实（${factsCount()}）`;
+      shortTabBtn.textContent = `状态（${stateEdit.characters.length}）`;
+      longTabBtn.textContent = `索引（${archiveEdit.length}）`;
+      factsTabBtn.textContent = `召回（${recallLogEdit.length}）`;
       seedsTabBtn.textContent = `免费生图（${Object.keys(seedArchiveEdit).length}）`;
       anchorsTabBtn.textContent = `锚点（${Object.keys(appearanceAnchorsEdit).length}）`;
       supplementTabBtn.textContent = `补充（${supplementEdit.trim().length}字）`;
       plotTabBtn.textContent = `剧情（${plotEdit.stages.length}）`;
-      shortTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'short' ? 'btn-primary' : 'btn-ghost');
-      longTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'long' ? 'btn-primary' : 'btn-ghost');
-      factsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'facts' ? 'btn-primary' : 'btn-ghost');
+      shortTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'state' ? 'btn-primary' : 'btn-ghost');
+      longTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'archive' ? 'btn-primary' : 'btn-ghost');
+      factsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'recalls' ? 'btn-primary' : 'btn-ghost');
       seedsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'seeds' ? 'btn-primary' : 'btn-ghost');
       anchorsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'anchors' ? 'btn-primary' : 'btn-ghost');
       supplementTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'supplement' ? 'btn-primary' : 'btn-ghost');
@@ -972,10 +1001,10 @@ export async function openMemoryEditor(chat, character, onUpdate) {
 
   renderContent();
 
-  // 顶部页签切换：短期 / 长期 / 事实备忘 / 插图种子 / 外貌身材锚点
-  document.getElementById('tab-short').addEventListener('click', () => { activeTab = 'short'; renderContent(); });
-  document.getElementById('tab-long').addEventListener('click', () => { activeTab = 'long'; renderContent(); });
-  document.getElementById('tab-facts').addEventListener('click', () => { activeTab = 'facts'; renderContent(); });
+  // 顶部页签切换：当前状态 / 对话索引 / 召回记录 / 辅助设定
+  document.getElementById('tab-short').addEventListener('click', () => { activeTab = 'state'; renderContent(); });
+  document.getElementById('tab-long').addEventListener('click', () => { activeTab = 'archive'; renderContent(); });
+  document.getElementById('tab-facts').addEventListener('click', () => { activeTab = 'recalls'; renderContent(); });
   document.getElementById('tab-seeds').addEventListener('click', () => { activeTab = 'seeds'; renderContent(); });
   document.getElementById('tab-anchors').addEventListener('click', () => { activeTab = 'anchors'; renderContent(); });
   document.getElementById('tab-supplement').addEventListener('click', () => { activeTab = 'supplement'; renderContent(); });
@@ -1034,6 +1063,14 @@ export async function openMemoryEditor(chat, character, onUpdate) {
 
       console.log('[memory editor] save shortTerm:', newShortTerm.length, 'longTerm:', newLongTerm.length);
 
+      // 新版原文召回记忆：保存当前状态、索引卡与召回记录；原文档案不按摘要过滤
+      stateEdit.characters = stateEdit.characters.filter((c) => String(c.name || '').trim());
+      stateEdit.promises = stateEdit.promises.filter((p) => String(p.text || '').trim());
+      stateEdit.events = stateEdit.events.filter((e) => String(e.text || '').trim());
+      stateEdit.intel = stateEdit.intel.filter((i) => String(i.text || '').trim());
+      chat.memory.state = stateEdit;
+      chat.memory.archive = archiveEdit;
+      chat.memory.recallLog = recallLogEdit;
       chat.memory.shortTerm = newShortTerm;
       chat.memory.longTerm = newLongTerm;
       // 对话补充设定：单文本区，常驻注入 system（仅本对话生效）
