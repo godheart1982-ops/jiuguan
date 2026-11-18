@@ -65,6 +65,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   // 原文召回型记忆本地副本：状态账本 / 轮次索引 / 召回记录
   let stateEdit = JSON.parse(JSON.stringify(chat.memory.state || emptyMemoryState()));
   let archiveEdit = JSON.parse(JSON.stringify(chat.memory.archive || []));
+  let archivePage = 1;
   let recallLogEdit = JSON.parse(JSON.stringify(chat.memory.recallLog || []));
   // 免费生图记忆（本地副本，保存时写回 chat.seedArchive；{角色名: {seed, anchor}} 形态）
   let seedArchiveEdit = Object.fromEntries(
@@ -203,10 +204,17 @@ export async function openMemoryEditor(chat, character, onUpdate) {
     return '第 ' + ranges.join(', ') + ' 轮';
   }
 
-  function updateCounter() {
-    const text = JSON.stringify({ state: stateEdit, archive: archiveEdit, recallLog: recallLogEdit, supplement: supplementEdit });
-    const tokens = countTokens(text);
-    counterEl.textContent = `${tokens} tokens`;
+  let counterTimer = null;
+  function updateCounter(immediate = false) {
+    if (counterTimer) clearTimeout(counterTimer);
+    const update = () => {
+      counterTimer = null;
+      const text = JSON.stringify({ state: stateEdit, archive: archiveEdit, recallLog: recallLogEdit, supplement: supplementEdit });
+      const tokens = countTokens(text);
+      counterEl.textContent = `${tokens} tokens`;
+    };
+    if (immediate) update();
+    else counterTimer = setTimeout(update, 300);
   }
 
   function renderContent() {
@@ -225,6 +233,8 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         tab: activeTab,
         state: stateEdit,
         archive: archiveEdit,
+        archivePage,
+        onArchivePage: (page) => { archivePage = page; },
         recallLog: recallLogEdit,
         contentEl,
         chat,
@@ -1002,6 +1012,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   }
 
   renderContent();
+  updateCounter(true);
 
   // 顶部页签切换：当前状态 / 对话索引 / 召回记录 / 辅助设定
   document.getElementById('tab-short').addEventListener('click', () => { activeTab = 'state'; renderContent(); });
@@ -1013,6 +1024,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   document.getElementById('tab-plot').addEventListener('click', () => { activeTab = 'plot'; renderContent(); });
 
   function closeEditor() {
+    if (counterTimer) clearTimeout(counterTimer);
     overlay.remove();
   }
 

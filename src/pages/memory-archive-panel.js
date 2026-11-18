@@ -19,6 +19,19 @@ const CHARACTER_FIELDS = [
   ['boundaries', '亲密边界'], ['knowledge', '当前知情'], ['plans', '个人计划']
 ];
 
+export const ARCHIVE_PAGE_SIZE = 20;
+
+export function getArchivePage(archive, requestedPage = 1, pageSize = ARCHIVE_PAGE_SIZE) {
+  const list = Array.isArray(archive) ? archive : [];
+  const size = Math.max(1, Math.trunc(Number(pageSize)) || ARCHIVE_PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(list.length / size));
+  const requested = Math.trunc(Number(requestedPage)) || 1;
+  const page = Math.min(Math.max(1, requested), totalPages);
+  const items = list.map((entry, index) => ({ entry, index })).reverse()
+    .slice((page - 1) * size, page * size);
+  return { items, page, totalPages };
+}
+
 export function renderMemoryArchivePanel(options) {
   const { tab, state, archive, recallLog, contentEl, chat, character, onChange, onData, rerender } = options;
 
@@ -98,24 +111,31 @@ export function renderMemoryArchivePanel(options) {
   }
 
   function renderArchive() {
-    const cards = archive.map((entry, i) => {
-      const raw = readArchivedTurn(chat.messages, entry);
-      const original = raw ? `用户：${raw.userText}\n\nAI：${raw.assistantText}` : '原消息已删除或当前分支不包含此轮';
-      return `
+    const { items, page, totalPages } = getArchivePage(archive, options.archivePage);
+    options.onArchivePage?.(page);
+    const cards = items.map(({ entry, index: i }) => `
       <div class="memory-card">
         <div class="memory-card-header"><span class="memory-round-badge">第 ${entry.round ?? '—'} 轮</span><button class="btn btn-ghost btn-small archive-reindex" data-i="${i}">重建索引</button></div>
         <input class="form-input archive-title" data-i="${i}" value="${escapeHtml(entry.index?.title || '')}" placeholder="索引标题" style="margin-bottom:6px;">
         <textarea class="form-textarea archive-summary" data-i="${i}" rows="2" placeholder="索引摘要">${escapeHtml(entry.index?.summary || '')}</textarea>
         <input class="form-input archive-keywords" data-i="${i}" value="${escapeHtml((entry.index?.keywords || []).join('、'))}" placeholder="关键词，顿号分隔" style="margin-top:6px;">
         <input class="form-input archive-aliases" data-i="${i}" value="${escapeHtml((entry.index?.aliases || []).join('、'))}" placeholder="其他说法/语义别名" style="margin-top:6px;">
-        <details style="margin-top:8px;"><summary style="cursor:pointer;color:#aaa;">查看本轮详细原文</summary><pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:#bbb;margin-top:8px;">${escapeHtml(original)}</pre></details>
-      </div>`;
-    }).join('');
+        <details class="archive-original" data-i="${i}" style="margin-top:8px;"><summary style="cursor:pointer;color:#aaa;">查看本轮详细原文</summary><pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:#bbb;margin-top:8px;"></pre></details>
+      </div>`).join('');
+    const pagination = archive.length > ARCHIVE_PAGE_SIZE ? `
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;">
+        <button class="btn btn-ghost btn-small" id="archive-prev" ${page <= 1 ? 'disabled' : ''}>上一页</button>
+        <span style="font-size:12px;color:#aaa;">第</span>
+        <input type="number" class="form-input" id="archive-page" min="1" max="${totalPages}" value="${page}" style="width:64px;">
+        <span style="font-size:12px;color:#aaa;">/ ${totalPages} 页，每页 ${ARCHIVE_PAGE_SIZE} 张</span>
+        <button class="btn btn-ghost btn-small" id="archive-next" ${page >= totalPages ? 'disabled' : ''}>下一页</button>
+      </div>` : '';
     contentEl.innerHTML = `
       <div class="memory-section">
         <div class="memory-section-title">对话索引（${archive.length}）</div>
-        <div class="memory-section-hint" style="font-size:12px;color:#888;margin:2px 0 10px;">原文永久保留；这里只编辑用于查找它的目录。最新一轮仍在原文窗口，退入历史后才入库。索引可以手改或按原文重建。</div>
+        <div class="memory-section-hint" style="font-size:12px;color:#888;margin:2px 0 10px;">原文永久保留；这里只编辑用于查找它的目录。最新轮次优先，每页 ${ARCHIVE_PAGE_SIZE} 张；详细原文仅在展开时读取。索引可以手改或按原文重建。</div>
         <button class="btn btn-ghost btn-small" id="archive-catchup" style="margin-bottom:10px;">整理所有待入库轮次</button>
+        ${pagination}
         <div class="memory-list">${cards || '<div class="memory-empty">暂无已入库轮次</div>'}</div>
       </div>`;
     for (const [selector, key] of [['.archive-title', 'title'], ['.archive-summary', 'summary']]) {
@@ -124,6 +144,19 @@ export function renderMemoryArchivePanel(options) {
     for (const [selector, key] of [['.archive-keywords', 'keywords'], ['.archive-aliases', 'aliases']]) {
       contentEl.querySelectorAll(selector).forEach((el) => el.addEventListener('change', () => { (archive[el.dataset.i].index ||= {})[key] = el.value.split(/[,，;；、]/).map((s) => s.trim()).filter(Boolean); onChange(); }));
     }
+    contentEl.querySelectorAll('.archive-original').forEach((el) => el.addEventListener('toggle', () => {
+      const pre = el.querySelector('pre');
+      if (!el.open) { pre.textContent = ''; return; }
+      const raw = readArchivedTurn(chat.messages, archive[el.dataset.i]);
+      pre.textContent = raw ? `用户：${raw.userText}\n\nAI：${raw.assistantText}` : '原消息已删除或当前分支不包含此轮';
+    }));
+    const goToPage = (nextPage) => {
+      options.onArchivePage?.(getArchivePage(archive, nextPage).page);
+      rerender();
+    };
+    contentEl.querySelector('#archive-prev')?.addEventListener('click', () => goToPage(page - 1));
+    contentEl.querySelector('#archive-next')?.addEventListener('click', () => goToPage(page + 1));
+    contentEl.querySelector('#archive-page')?.addEventListener('change', (e) => goToPage(e.target.value));
     contentEl.querySelectorAll('.archive-reindex').forEach((el) => el.addEventListener('click', async () => {
       const entry = archive[el.dataset.i];
       el.disabled = true;
