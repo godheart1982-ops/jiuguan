@@ -7,7 +7,8 @@ import { resolveMemoryApi, trimAssistantForMemory, extractMemoryCorrections } fr
 
 export const RECENT_RAW_TURNS = 1;
 export const MEMORY_ENGINE_VERSION = 'archive-v1';
-export const MEMORY_RECALL_LIMIT = 2;
+export const MEMORY_RECALL_LIMIT = 8;
+export const MEMORY_RECALL_DETAIL_LIMIT = 2;
 
 export function emptyMemoryState() {
   return {
@@ -458,6 +459,12 @@ ${JSON.stringify(cards)}`;
       after: selection.includeContext && index >= 0 && index < memory.archive.length - 1 ? memory.archive[index + 1].index?.summary || '' : ''
     };
   });
+  // 多条命中分层：按剧情时间最近的两轮展开详细原文，较早命中只给摘要
+  const newest = [...recalls]
+    .sort((a, b) => memory.archive.indexOf(a.entry) - memory.archive.indexOf(b.entry))
+    .slice(-MEMORY_RECALL_DETAIL_LIMIT);
+  const detailIds = new Set(newest.map((r) => r.turnId));
+  recalls.forEach((recall) => { recall.detail = detailIds.has(recall.turnId); });
   memory.recallLog.push({
     createdAt: new Date().toISOString(),
     userText: String(query.userMessage || ''),
@@ -470,18 +477,25 @@ ${JSON.stringify(cards)}`;
 
 export function formatRecalledTurns(recalls, messages = []) {
   if (!Array.isArray(recalls) || !recalls.length) return '';
-  const blocks = recalls.map((recall) => {
+  const byRound = (a, b) => (a.entry?.round || 0) - (b.entry?.round || 0);
+  const isDetail = (recall) => recall.detail === true || (recall.detail === undefined && recalls.length <= MEMORY_RECALL_DETAIL_LIMIT);
+  const summaries = recalls.filter((recall) => !isDetail(recall)).sort(byRound).map((recall) => {
+    const entry = recall.entry;
+    return `【历史摘要｜第 ${entry.round ?? '—'} 轮｜${entry.index?.title || '相关对话'}】${entry.index?.summary || ''}`;
+  });
+  const details = recalls.filter(isDetail).sort(byRound).map((recall) => {
     const entry = recall.entry;
     const raw = entry && readArchivedTurn(messages, entry);
     if (!raw) return '';
-    const lines = [`【历史第 ${entry.round ?? '—'} 轮｜${entry.index?.title || '相关对话'}】`];
+    const lines = [`【历史详细原文｜第 ${entry.round ?? '—'} 轮｜${entry.index?.title || '相关对话'}】`];
     if (recall.before) lines.push('前情：' + recall.before);
     lines.push('用户：' + raw.userText, 'AI：' + raw.assistantText);
     if (recall.after) lines.push('后续：' + recall.after);
     return lines.join('\n');
   }).filter(Boolean);
+  const blocks = [...summaries, ...details];
   if (!blocks.length) return '';
-  return '【召回的历史详细原文】（以下只代表过去实际发生的对话；过去的场景、衣着、情绪和数值不得覆盖当前状态）\n\n' + blocks.join('\n\n');
+  return '【召回的历史记忆】（以下只代表过去实际发生的对话；较早命中只给摘要，最近两轮给详细原文；过去的场景、衣着、情绪和数值不得覆盖当前状态）\n\n' + blocks.join('\n\n');
 }
 
 /** 从当前全部已入库原文重建状态；用于旧轮编辑后的手动修复。 */

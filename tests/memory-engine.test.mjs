@@ -81,6 +81,24 @@ test('历史原文注入：明确过去属性并从 messages 读取详细对话'
   assert.ok(text.includes('前情'));
 });
 
+test('多轮命中：较早轮次只给摘要，最近两轮保留详细原文', () => {
+  const rounds = [1, 2, 3, 4].map((n) => makeRound(n));
+  const recalls = rounds.map((round, i) => ({
+    entry: { ...archiveEntryForRound(round), index: { title: `标题${i + 1}`, summary: `摘要${i + 1}` } },
+    detail: i >= 2
+  }));
+  const messages = rounds.flatMap((round) => [round.user, round.assistant]);
+  const text = formatRecalledTurns(recalls, messages);
+  assert.ok(text.includes('【历史摘要｜第 1 轮'));
+  assert.ok(text.includes('【历史摘要｜第 2 轮'));
+  assert.ok(text.includes('【历史详细原文｜第 3 轮'));
+  assert.ok(text.includes('【历史详细原文｜第 4 轮'));
+  assert.ok(!text.includes('用户：输入1'));
+  assert.ok(!text.includes('用户：输入2'));
+  assert.ok(text.includes('用户：输入3'));
+  assert.ok(text.includes('用户：输入4'));
+});
+
 test('快速连发兜底：倒数第二轮未入库或版本变化时增加原文窗口', () => {
   const memory = { archive: [] };
   const rounds = [makeRound(1), makeRound(2)];
