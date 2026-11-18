@@ -24,6 +24,13 @@ export function emptyMemoryState() {
 export function ensureMemoryEngine(memory) {
   if (!memory || typeof memory !== 'object') return memory;
   if (!Array.isArray(memory.archive)) memory.archive = [];
+  // 早期新版曾把原文复制进索引；原 messages 才是唯一数据源，旧重复字段读取时剔除
+  for (const entry of memory.archive) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (String(entry.assistantText || '').startsWith('【开场白】')) entry.includeGreeting = true;
+    delete entry.userText;
+    delete entry.assistantText;
+  }
   if (!memory.state || typeof memory.state !== 'object') memory.state = emptyMemoryState();
   const state = memory.state;
   if (typeof state.scene !== 'string') state.scene = '';
@@ -92,17 +99,40 @@ function normalizeIndexCard(raw, fallbackText) {
 export function archiveEntryForRound(round, greeting = '') {
   const userText = String(round && round.user && round.user.content || '');
   const reply = cleanAssistantForArchive(round && round.assistant && round.assistant.content);
-  const assistantText = greeting ? `【开场白】\n${greeting}\n\n【本轮回复】\n${reply}` : reply;
   return {
     turnId: turnIdOf(round),
     round: Number.isFinite(round && round.user && round.user.round) ? round.user.round : null,
     turnTimestamp: String(round && round.user && round.user.timestamp || ''),
     revision: revisionOf(userText, reply),
-    userText,
-    assistantText,
+    includeGreeting: Boolean(greeting),
     index: null,
     stateAfter: null
   };
+}
+
+function roundFromMessages(messages, turnId) {
+  if (!Array.isArray(messages)) return null;
+  for (let i = 0; i < messages.length; i++) {
+    const user = messages[i];
+    if (!user || user.role !== 'user' || turnIdOf({ user }) !== turnId) continue;
+    for (let j = i + 1; j < messages.length; j++) {
+      if (messages[j].role === 'user') break;
+      if (messages[j].role === 'assistant') return { user, assistant: messages[j] };
+    }
+  }
+  return null;
+}
+
+/** 索引只存 turnId；需要原文时从当前消息与选定稿实时读取。 */
+export function readArchivedTurn(messages, entryOrId) {
+  const entry = entryOrId && typeof entryOrId === 'object' ? entryOrId : { turnId: String(entryOrId || '') };
+  const round = roundFromMessages(messages, entry.turnId);
+  if (!round) return null;
+  let assistantText = cleanAssistantForArchive(round.assistant.content);
+  if (entry.includeGreeting && messages[0] && messages[0].role === 'assistant') {
+    assistantText = `【开场白】\n${messages[0].content || ''}\n\n【本轮回复】\n${assistantText}`;
+  }
+  return { userText: String(round.user.content || ''), assistantText, round };
 }
 
 function normalizeState(state) {
@@ -227,6 +257,11 @@ export async function processRoundForMemory(round, context = {}) {
   const config = await getConfig();
   const api = memoryApiOrThrow(config);
   const entry = archiveEntryForRound(round, context.greeting || '');
+  const rawReply = cleanAssistantForArchive(round && round.assistant && round.assistant.content);
+  const rawTurn = {
+    userText: String(round && round.user && round.user.content || ''),
+    assistantText: context.greeting ? `【开场白】\n${context.greeting}\n\n【本轮回复】\n${rawReply}` : rawReply
+  };
   const prompt = `请为这一轮角色扮演对话建立“召回索引卡”，并只上报本轮真实发生的状态变化。
 
 只输出一个 JSON 对象：
@@ -259,15 +294,15 @@ ${String(context.supplement || '').trim() || '无'}
 ${(context.corrections || []).join('\n') || '无'}
 
 【本轮对话原文】
-用户：${entry.userText}
+用户：${rawTurn.userText}
 
-AI：${entry.assistantText}`;
+AI：${rawTurn.assistantText}`;
   const raw = await sendChat([
     { role: 'system', content: '你是原文记忆索引与状态抽取助手。只输出合法 JSON，不输出解释。' },
     { role: 'user', content: prompt }
   ], { api, usageContext: { kind: 'memory' } });
   const parsed = parseJson(raw);
-  entry.index = normalizeIndexCard(parsed && (parsed.index || parsed.card), entry.userText + ' ' + entry.assistantText);
+  entry.index = normalizeIndexCard(parsed && (parsed.index || parsed.card), rawTurn.userText + ' ' + rawTurn.assistantText);
   return {
     entry,
     statePatch: parsed && parsed.statePatch && typeof parsed.statePatch === 'object' ? parsed.statePatch : {}
@@ -433,14 +468,15 @@ ${JSON.stringify(cards)}`;
   return { selections, recalls };
 }
 
-export function formatRecalledTurns(recalls) {
+export function formatRecalledTurns(recalls, messages = []) {
   if (!Array.isArray(recalls) || !recalls.length) return '';
   const blocks = recalls.map((recall) => {
     const entry = recall.entry;
-    if (!entry) return '';
+    const raw = entry && readArchivedTurn(messages, entry);
+    if (!raw) return '';
     const lines = [`【历史第 ${entry.round ?? '—'} 轮｜${entry.index?.title || '相关对话'}】`];
     if (recall.before) lines.push('前情：' + recall.before);
-    lines.push('用户：' + entry.userText, 'AI：' + entry.assistantText);
+    lines.push('用户：' + raw.userText, 'AI：' + raw.assistantText);
     if (recall.after) lines.push('后续：' + recall.after);
     return lines.join('\n');
   }).filter(Boolean);
@@ -453,16 +489,17 @@ export async function rebuildMemoryState(chat, character, hooks = {}) {
   ensureMemoryEngine(chat.memory);
   let state = emptyMemoryState();
   for (const entry of chat.memory.archive) {
+    const round = roundFromMessages(chat.messages, entry.turnId);
+    if (!round) continue;
     hooks.onStatus?.(`正在重建第 ${entry.round ?? '—'} 轮状态…`, 'info');
-    const result = await processRoundForMemory({
-      user: { content: entry.userText, timestamp: entry.turnTimestamp, round: entry.round },
-      assistant: { content: entry.assistantText }
-    }, {
+    const result = await processRoundForMemory(round, {
       currentState: state,
       supplement: chat.memory.supplement || '',
-      characterName: character.name || ''
+      characterName: character.name || '',
+      greeting: entry.includeGreeting && chat.messages[0] && chat.messages[0].role === 'assistant' ? chat.messages[0].content : ''
     });
     entry.index = result.entry.index;
+    entry.revision = result.entry.revision;
     state = applyMemoryStatePatch(state, result.statePatch, entry.turnId);
     entry.stateAfter = clone(state);
     await saveChat(chat).catch(() => {});

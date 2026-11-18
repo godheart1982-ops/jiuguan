@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ensureMemoryEngine, emptyMemoryState, turnIdOf, archiveEntryForRound,
   applyMemoryStatePatch, formatMemoryState, formatRecalledTurns,
-  needsMemoryRawFallback, markMessageMemoryEdited, truncateMemoryForResend
+  needsMemoryRawFallback, markMessageMemoryEdited, truncateMemoryForResend, readArchivedTurn
 } from '../src/services/memory-engine.js';
 
 function makeRound(n, userText = `输入${n}`, aiText = `回复${n}`) {
@@ -23,13 +23,19 @@ test('永久轮次 ID：已有 turnId 不变，老消息首次计算后补写', 
   assert.equal(turnIdOf(round), id);
 });
 
-test('原文档案：剥思考与行动选项，开场白不改变版本指纹', () => {
+test('原文档案：索引不复制原文，引用消息时清理并附开场白', () => {
   const round = makeRound(1, '你好', '<思考>推演</思考>正文\n\n>### 行动选项\n1. 其他可能');
   const plain = archiveEntryForRound(round);
   const withGreeting = archiveEntryForRound(round, '开场');
-  assert.equal(plain.assistantText, '正文');
+  assert.equal('userText' in plain, false);
+  assert.equal('assistantText' in plain, false);
   assert.equal(plain.revision, withGreeting.revision);
-  assert.ok(withGreeting.assistantText.includes('【开场白】'));
+  assert.equal(withGreeting.includeGreeting, true);
+  const raw = readArchivedTurn([{ role: 'assistant', content: '开场' }, round.user, round.assistant], withGreeting);
+  assert.equal(raw.userText, '你好');
+  assert.ok(raw.assistantText.includes('【开场白】'));
+  assert.ok(raw.assistantText.includes('正文'));
+  assert.ok(!raw.assistantText.includes('行动选项'));
 });
 
 test('状态补丁：未提旧项不变，人物按名局部更新，删除必须显式', () => {
@@ -65,10 +71,11 @@ test('状态账本格式化：保留关系约定、约定、事件与知情范�
   assert.ok(text.includes('夏逐波'));
 });
 
-test('历史原文注入：明确过去属性并保留详细对话', () => {
-  const entry = archiveEntryForRound(makeRound(38, '你凭什么管我', '当初我们说好不干涉'));
+test('历史原文注入：明确过去属性并从 messages 读取详细对话', () => {
+  const round = makeRound(38, '你凭什么管我', '当初我们说好不干涉');
+  const entry = archiveEntryForRound(round);
   entry.index = { title: '确认炮友边界' };
-  const text = formatRecalledTurns([{ entry, before: '前情', after: '后续' }]);
+  const text = formatRecalledTurns([{ entry, before: '前情', after: '后续' }], [round.user, round.assistant]);
   assert.ok(text.includes('只代表过去'));
   assert.ok(text.includes('当初我们说好不干涉'));
   assert.ok(text.includes('前情'));
@@ -100,10 +107,11 @@ test('编辑已入库轮次：旧索引立即失效；未入库最新轮不受�
   assert.equal(markMessageMemoryEdited(chat, fresh.assistant), false);
 });
 
-test('记忆结构初始化幂等，召回日志有界', () => {
-  const memory = {};
+test('记忆结构初始化幂等，旧版重复原文自动剔除', () => {
+  const memory = { archive: [{ turnId: 'turn-1', userText: '重复输入', assistantText: '重复回复' }] };
   ensureMemoryEngine(memory);
-  assert.deepEqual(memory.archive, []);
+  assert.equal('userText' in memory.archive[0], false);
+  assert.equal('assistantText' in memory.archive[0], false);
   assert.equal(memory.engine, 'archive-v1');
   ensureMemoryEngine(memory);
   assert.equal(memory.engine, 'archive-v1');

@@ -180,7 +180,7 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   // 新版记忆：当前状态常驻；发送前由副 API 选出的历史原文仅本轮注入
   const currentStateBlock = memoryOn ? formatCurrentMemoryState(memory) : '';
   if (currentStateBlock) systemContent += '\n\n' + currentStateBlock;
-  const recalledBlock = memoryOn ? formatRecalledTurns(options && options.recalledTurns) : '';
+  const recalledBlock = memoryOn ? formatRecalledTurns(options && options.recalledTurns, historyMessages) : '';
   if (recalledBlock) systemContent += '\n\n' + recalledBlock;
 
   // 对话补充设定：用户手动维护的单档覆盖补丁（记忆编辑器「补充」页签）；

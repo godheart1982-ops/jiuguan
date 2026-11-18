@@ -2,7 +2,7 @@
 // 与插图、补充设定、剧情线等既有页签并存。
 
 import {
-  processRoundForMemory, rebuildMemoryState, catchUpMemoryArchive, selectMemoryRecalls
+  processRoundForMemory, rebuildMemoryState, catchUpMemoryArchive, selectMemoryRecalls, readArchivedTurn
 } from '../services/memory-engine.js';
 import { getAllRounds, getLeadingGreeting } from './chat/chat-memory-helpers.js';
 
@@ -97,15 +97,19 @@ export function renderMemoryArchivePanel(options) {
   }
 
   function renderArchive() {
-    const cards = archive.map((entry, i) => `
+    const cards = archive.map((entry, i) => {
+      const raw = readArchivedTurn(chat.messages, entry);
+      const original = raw ? `用户：${raw.userText}\n\nAI：${raw.assistantText}` : '原消息已删除或当前分支不包含此轮';
+      return `
       <div class="memory-card">
         <div class="memory-card-header"><span class="memory-round-badge">第 ${entry.round ?? '—'} 轮</span><button class="btn btn-ghost btn-small archive-reindex" data-i="${i}">重建索引</button></div>
         <input class="form-input archive-title" data-i="${i}" value="${escapeHtml(entry.index?.title || '')}" placeholder="索引标题" style="margin-bottom:6px;">
         <textarea class="form-textarea archive-summary" data-i="${i}" rows="2" placeholder="索引摘要">${escapeHtml(entry.index?.summary || '')}</textarea>
         <input class="form-input archive-keywords" data-i="${i}" value="${escapeHtml((entry.index?.keywords || []).join('、'))}" placeholder="关键词，顿号分隔" style="margin-top:6px;">
         <input class="form-input archive-aliases" data-i="${i}" value="${escapeHtml((entry.index?.aliases || []).join('、'))}" placeholder="其他说法/语义别名" style="margin-top:6px;">
-        <details style="margin-top:8px;"><summary style="cursor:pointer;color:#aaa;">查看本轮详细原文</summary><pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:#bbb;margin-top:8px;">用户：${escapeHtml(entry.userText)}\n\nAI：${escapeHtml(entry.assistantText)}</pre></details>
-      </div>`).join('');
+        <details style="margin-top:8px;"><summary style="cursor:pointer;color:#aaa;">查看本轮详细原文</summary><pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:#bbb;margin-top:8px;">${escapeHtml(original)}</pre></details>
+      </div>`;
+    }).join('');
     contentEl.innerHTML = `
       <div class="memory-section">
         <div class="memory-section-title">对话索引（${archive.length}）</div>
@@ -123,11 +127,15 @@ export function renderMemoryArchivePanel(options) {
       const entry = archive[el.dataset.i];
       el.disabled = true;
       try {
-        const result = await processRoundForMemory({
-          user: { content: entry.userText, timestamp: entry.turnTimestamp, turnId: entry.turnId, round: entry.round },
-          assistant: { content: entry.assistantText }
-        }, { currentState: state, supplement: chat.memory.supplement || '' });
+        const raw = readArchivedTurn(chat.messages, entry);
+        if (!raw) throw new Error('原消息已删除，无法重建索引');
+        const result = await processRoundForMemory(raw.round, {
+          currentState: state,
+          supplement: chat.memory.supplement || '',
+          greeting: entry.includeGreeting ? getLeadingGreeting(chat.messages) : ''
+        });
         entry.index = result.entry.index;
+        entry.revision = result.entry.revision;
         onChange();
         rerender();
       } catch (err) { alert('索引重建失败：' + err.message); el.disabled = false; }
