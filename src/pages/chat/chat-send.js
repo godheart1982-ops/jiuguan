@@ -11,6 +11,7 @@ import {
   selectMemoryRecalls, catchUpMemoryArchive, needsMemoryRawFallback,
   RECENT_RAW_TURNS, turnIdOf
 } from '../../services/memory-engine.js';
+import { buildActionOptionContext } from '../../services/action-options.js';
 import { updateGenerationForeground } from '../../services/foreground.js';
 import { ensurePollinationsAnchors } from '../../services/image-gen.js';
 import { countTokens } from '../../utils/tokenizer.js';
@@ -168,6 +169,7 @@ export function createSendController(deps) {
               currentState: chat.memory.state,
               recentUser: latest ? latest.user.content : '',
               recentAssistant: latest ? latest.assistant.content : '',
+              actionContext: latest ? buildActionOptionContext(latest.assistant.content, userMsg.content) : '',
               excludeTurnIds: excludedTurnIds
             });
             recalledTurns = result.recalls;

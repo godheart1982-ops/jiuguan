@@ -39,15 +39,15 @@ function optionLineFor(content, number) {
   return line ? line[1].trim() : '';
 }
 
-/** 单选 2、复合 1+3、选2再……；不识别剧情里其他自由数字表述。 */
+/** 开头编号即选项：2 / 1+3 / 选2再…… / 2再…… / 2，…… / 2 ……；后续文字均为补充。 */
 export function parseSelectedOptionNumbers(userMessage) {
   const text = String(userMessage || '').trim();
-  if (/^[1-7]$/.test(text)) return [Number(text)];
-  if (/^[1-7](?:\s*[+＋]\s*[1-7])+$/.test(text)) {
-    return Array.from(text.matchAll(/[1-7]/g), (m) => Number(m[0]));
-  }
-  const pick = /^选\s*([1-7])(?=\s|$|[再先然并后，,。;；])/.exec(text);
-  return pick ? [Number(pick[1])] : [];
+  const combo = /^[1-7](?:\s*[+＋]\s*[1-7])+(?![+＋\d])/.exec(text);
+  if (combo) return Array.from(combo[0].matchAll(/[1-7]/g), (m) => Number(m[0]));
+  const pick = /^选\s*([1-7])(?=\D|$)/.exec(text);
+  if (pick) return [Number(pick[1])];
+  const short = /^([1-7])(?!\d)/.exec(text);
+  return short ? [Number(short[1])] : [];
 }
 
 /** 最近菜单仍完整出现在历史里，因此在本轮 user 旁声明其非事实属性与已选项。 */

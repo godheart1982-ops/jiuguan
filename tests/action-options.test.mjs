@@ -36,12 +36,19 @@ test('剥离行动选项：无菜单原文保留，有菜单只留前文', () =>
   assert.equal(stripActionOptions(reply('正文')), '正文');
 });
 
-test('选择解析：单选、复合与选2再补充', () => {
+test('选择解析：单选、复合与各种文字补充简写', () => {
   assert.deepEqual(parseSelectedOptionNumbers('2'), [2]);
   assert.deepEqual(parseSelectedOptionNumbers('1+3'), [1, 3]);
   assert.deepEqual(parseSelectedOptionNumbers('1＋3'), [1, 3]);
   assert.deepEqual(parseSelectedOptionNumbers('选2再追问一句'), [2]);
+  assert.deepEqual(parseSelectedOptionNumbers('2再追问一句'), [2]);
+  assert.deepEqual(parseSelectedOptionNumbers('2，怎么'), [2]);
+  assert.deepEqual(parseSelectedOptionNumbers('2 怎么怎么能'), [2]);
+  assert.deepEqual(parseSelectedOptionNumbers('2怎么能这样'), [2]);
+  assert.deepEqual(parseSelectedOptionNumbers('1+3再追问'), [1, 3]);
+  assert.deepEqual(parseSelectedOptionNumbers('1+3 然后离开'), [1, 3]);
   assert.deepEqual(parseSelectedOptionNumbers('我拒绝'), []);
+  assert.deepEqual(parseSelectedOptionNumbers('2026年'), []);
 });
 
 test('选择上下文：只把已选项列为行动核心，其余候选未发生', () => {
@@ -53,8 +60,10 @@ test('选择上下文：只把已选项列为行动核心，其余候选未发�
 });
 
 test('选择上下文：复合选择保留顺序，自由输入只声明候选边界', () => {
-  const combo = buildActionOptionContext(reply('正文'), '1+3');
+  const combo = buildActionOptionContext(reply('正文'), '1+3再离开');
   assert.ok(combo.indexOf('第1条：') < combo.indexOf('第3条：'));
+  const short = buildActionOptionContext(reply('正文'), '2 然后问她原因');
+  assert.ok(short.includes('第2条：她接过主控的礼物（约1分钟）'));
   const free = buildActionOptionContext(reply('正文'), '我先离开');
   assert.ok(free.includes('候选与格式示例'));
   assert.ok(!free.includes('【本轮已选择行动】'));

@@ -381,6 +381,9 @@ export async function selectMemoryRecalls(memory, query = {}) {
 【本轮输入】
 ${String(query.userMessage || '')}
 
+【行动选项解析（与主 API 共用）】
+${String(query.actionContext || '自由输入或无可用选项')}
+
 【当前状态】
 ${formatMemoryState(query.currentState) || '无'}
 
