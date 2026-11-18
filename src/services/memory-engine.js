@@ -7,7 +7,8 @@ import { resolveMemoryApi, trimAssistantForMemory, extractMemoryCorrections } fr
 
 export const RECENT_RAW_TURNS = 1;
 export const MEMORY_ENGINE_VERSION = 'archive-v1';
-export const MEMORY_RECALL_LIMIT = 8;
+export const MEMORY_RECALL_LIMIT = 16;
+export const RECALL_BATCH_SIZE = 200;
 export const MEMORY_RECALL_DETAIL_LIMIT = 2;
 
 export function emptyMemoryState() {
@@ -400,7 +401,92 @@ function selectorCards(memory, excluded) {
   return memory.archive.filter((entry) => entry && entry.index && !excluded.has(entry.turnId));
 }
 
-/** 主回复前：副 API 读全部索引卡，选 0-2 轮真实原文。 */
+export function chunkRecallCards(cards, size = RECALL_BATCH_SIZE) {
+  const chunks = [];
+  for (let i = 0; i < cards.length; i += size) chunks.push(cards.slice(i, i + size));
+  return chunks;
+}
+
+function recallScopeRank(scope) {
+  return ({ none: 0, normal: 1, specific: 2, review: 3 })[scope] ?? 1;
+}
+
+/** 清洗分级结果：low 丢弃；普通轮少量，长线回顾最多 16 条；只有 high 可展开原文。 */
+export function finalizeRecallSelections(memory, rows, scope = 'normal') {
+  const safeScope = ['none', 'normal', 'specific', 'review'].includes(scope) ? scope : 'normal';
+  if (safeScope === 'none') return [];
+  const limit = safeScope === 'review' ? MEMORY_RECALL_LIMIT : (safeScope === 'specific' ? 6 : 4);
+  const seen = new Set();
+  const valid = [];
+  const ordered = (Array.isArray(rows) ? rows : []).slice().sort((a, b) => {
+    const rank = (level) => level === 'high' ? 0 : 1;
+    return rank(a && a.level) - rank(b && b.level);
+  });
+  for (const row of ordered) {
+    const turnId = String(row && (row.turnId || row.id) || '');
+    const level = row && row.level === 'medium' ? 'medium' : (row && row.level === 'low' ? 'low' : 'high');
+    if (!turnId || seen.has(turnId) || level === 'low') continue;
+    const index = memory.archive.findIndex((a) => a.turnId === turnId && a.index);
+    if (index < 0) continue;
+    seen.add(turnId);
+    valid.push({
+      turnId,
+      level,
+      reason: String(row.reason || '').trim(),
+      includeContext: row.includeContext === true,
+      entry: memory.archive[index],
+      before: row.includeContext === true && index > 0 ? memory.archive[index - 1].index?.summary || '' : '',
+      after: row.includeContext === true && index < memory.archive.length - 1 ? memory.archive[index + 1].index?.summary || '' : ''
+    });
+    if (valid.length >= limit) break;
+  }
+  const high = valid.filter((r) => r.level === 'high');
+  const newest = high.slice().sort((a, b) => memory.archive.indexOf(a.entry) - memory.archive.indexOf(b.entry))
+    .slice(-MEMORY_RECALL_DETAIL_LIMIT);
+  const detailIds = new Set(newest.map((r) => r.turnId));
+  valid.forEach((recall) => { recall.detail = detailIds.has(recall.turnId); });
+  return valid;
+}
+
+async function requestRecallBatch(api, cards, query) {
+  const prompt = `请从索引卡中找出本轮真正需要的历史记忆。允许一个也不选，禁止为凑数而选。
+
+只输出 JSON：{"scope":"none/normal/specific/review","recall":[{"turnId":"原id","level":"high/medium/low","reason":"一句理由","includeContext":false}]}
+turnId 必须照抄。scope 含义：none=当前状态足够或无历史需要；normal=普通续写；specific=针对某件旧事；review=明确要求回顾一段长期关系/事件线。
+
+选择纪律：
+1. high=能直接回答当前问题、解释当前冲突或提供不可缺少的前因；medium=人物与主题相关，可作背景摘要；low=只有人名/地点/关系/物品/情绪等宽泛重合。low 会在本地直接丢弃。
+2. 人名、地点、关系、当前状态只用于定位与消歧，不能单独构成召回理由。纯人名最多选一条 medium，也可为空。
+3. 普通续写默认少选或不选；specific 围绕一件事，不多带其他经历；review 才选择多个关键节点。
+4. 同一事件的多轮过程不得全选：普通问题选最直接一轮；长线回顾选起点/转折/结果/最新进展。
+5. 最近一轮已直接携带，不要选排除项。需要前因后果时才设 includeContext=true。
+
+【本轮输入】
+${String(query.userMessage || '')}
+
+【行动选项解析（与主 API 共用）】
+${String(query.actionContext || '自由输入或无可用选项')}
+
+【当前状态（仅用于消歧）】
+${formatMemoryState(query.currentState) || '无'}
+
+【最近一轮对话】
+用户：${String(query.recentUser || '')}
+AI：${String(query.recentAssistant || '')}
+
+【本批索引卡】
+${JSON.stringify(cards)}`;
+  const raw = await sendChat([
+    { role: 'system', content: '你是分级历史检索器。只输出合法 JSON，宁缺毋滥，禁止编造 turnId。' },
+    { role: 'user', content: prompt }
+  ], { api, usageContext: { kind: 'memory' } });
+  const parsed = parseJson(raw);
+  const rows = Array.isArray(parsed) ? parsed : (parsed && (parsed.recall || parsed.recalls)) || [];
+  const scope = parsed && !Array.isArray(parsed) && ['none', 'normal', 'specific', 'review'].includes(parsed.scope) ? parsed.scope : 'normal';
+  return { rows: Array.isArray(rows) ? rows : [], scope };
+}
+
+/** 主回复前：少量一次检索；超过 200 张卡分批并行初筛，再对候选汇总复选。 */
 export async function selectMemoryRecalls(memory, query = {}) {
   ensureMemoryEngine(memory);
   const excluded = new Set(query.excludeTurnIds || []);
@@ -409,66 +495,40 @@ export async function selectMemoryRecalls(memory, query = {}) {
   const config = await getConfig();
   const api = memoryApiOrThrow(config);
   const cards = candidates.map((entry) => ({ turnId: entry.turnId, round: entry.round, ...entry.index }));
-  const prompt = `请从全部历史索引卡中，找出与本轮角色扮演直接相关的历史对话。允许一个也不选，最多 ${MEMORY_RECALL_LIMIT} 轮。
-
-只输出 JSON：{"recall":[{"turnId":"索引卡原id","reason":"一句选择理由","includeContext":true或false}]}
-没有相关内容返回 {"recall":[]}。turnId 必须原样照抄。最近一轮已经直接携带，不要选被排除的 id。需要前因后果时才设 includeContext=true。
-
-【本轮输入】
-${String(query.userMessage || '')}
-
-【行动选项解析（与主 API 共用）】
-${String(query.actionContext || '自由输入或无可用选项')}
-
-【当前状态】
-${formatMemoryState(query.currentState) || '无'}
-
-【最近一轮对话】
-用户：${String(query.recentUser || '')}
-AI：${String(query.recentAssistant || '')}
-
-【全部历史索引卡】
-${JSON.stringify(cards)}`;
-  const raw = await sendChat([
-    { role: 'system', content: '你是历史对话检索器。只输出合法 JSON，宁缺毋滥，禁止编造 turnId。' },
-    { role: 'user', content: prompt }
-  ], { api, usageContext: { kind: 'memory' } });
-  const parsed = parseJson(raw);
-  const rows = Array.isArray(parsed) ? parsed : (parsed && (parsed.recall || parsed.recalls)) || [];
-  const seen = new Set();
-  const selections = [];
-  for (const row of Array.isArray(rows) ? rows : []) {
-    const turnId = String(row && (row.turnId || row.id) || '');
-    if (!turnId || seen.has(turnId) || excluded.has(turnId)) continue;
-    const entry = memory.archive.find((a) => a.turnId === turnId && a.index);
-    if (!entry) continue;
-    seen.add(turnId);
-    selections.push({
-      turnId,
-      reason: String(row.reason || '').trim(),
-      includeContext: row.includeContext === true
-    });
-    if (selections.length >= MEMORY_RECALL_LIMIT) break;
+  const batches = chunkRecallCards(cards);
+  let scope = 'normal';
+  let rows = [];
+  if (batches.length === 1) {
+    const result = await requestRecallBatch(api, batches[0], query);
+    rows = result.rows;
+    scope = result.scope;
+  } else {
+    const settled = await Promise.allSettled(batches.map((batch) => requestRecallBatch(api, batch, query)));
+    const successful = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+    if (!successful.length) throw new Error('所有记忆分批检索均失败');
+    rows = successful.flatMap((r) => r.rows);
+    scope = successful.map((r) => r.scope).sort((a, b) => recallScopeRank(b) - recallScopeRank(a))[0] || 'normal';
+    const ids = new Set(rows.map((r) => String(r && (r.turnId || r.id) || '')));
+    const candidateCards = cards.filter((card) => ids.has(card.turnId));
+    if (candidateCards.length) {
+      const merged = await requestRecallBatch(api, candidateCards, { ...query, recallScope: scope });
+      rows = merged.rows;
+      scope = merged.scope;
+    }
   }
-  const recalls = selections.map((selection) => {
-    const index = memory.archive.findIndex((a) => a.turnId === selection.turnId);
-    return {
-      ...selection,
-      entry: memory.archive[index],
-      before: selection.includeContext && index > 0 ? memory.archive[index - 1].index?.summary || '' : '',
-      after: selection.includeContext && index >= 0 && index < memory.archive.length - 1 ? memory.archive[index + 1].index?.summary || '' : ''
-    };
-  });
-  // 多条命中分层：按剧情时间最近的两轮展开详细原文，较早命中只给摘要
-  const newest = [...recalls]
-    .sort((a, b) => memory.archive.indexOf(a.entry) - memory.archive.indexOf(b.entry))
-    .slice(-MEMORY_RECALL_DETAIL_LIMIT);
-  const detailIds = new Set(newest.map((r) => r.turnId));
-  recalls.forEach((recall) => { recall.detail = detailIds.has(recall.turnId); });
+  const recalls = finalizeRecallSelections(memory, rows, scope);
+  const selections = recalls.map((recall) => ({
+    turnId: recall.turnId,
+    level: recall.level,
+    reason: recall.reason,
+    includeContext: recall.includeContext
+  }));
   memory.recallLog.push({
     createdAt: new Date().toISOString(),
     userText: String(query.userMessage || ''),
+    scope,
     turnIds: selections.map((s) => s.turnId),
+    levels: selections.map((s) => s.level),
     reasons: selections.map((s) => s.reason).filter(Boolean)
   });
   if (memory.recallLog.length > 50) memory.recallLog = memory.recallLog.slice(-50);

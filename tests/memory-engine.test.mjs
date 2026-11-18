@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   ensureMemoryEngine, emptyMemoryState, turnIdOf, archiveEntryForRound,
   applyMemoryStatePatch, formatMemoryState, formatRecalledTurns,
-  needsMemoryRawFallback, markMessageMemoryEdited, truncateMemoryForResend, readArchivedTurn
+  needsMemoryRawFallback, markMessageMemoryEdited, truncateMemoryForResend, readArchivedTurn,
+  finalizeRecallSelections, chunkRecallCards
 } from '../src/services/memory-engine.js';
 
 function makeRound(n, userText = `输入${n}`, aiText = `回复${n}`) {
@@ -97,6 +98,35 @@ test('多轮命中：较早轮次只给摘要，最近两轮保留详细原文',
   assert.ok(!text.includes('用户：输入2'));
   assert.ok(text.includes('用户：输入3'));
   assert.ok(text.includes('用户：输入4'));
+});
+
+test('分级召回：low 丢弃、medium 只给摘要、最近两轮 high 展开原文', () => {
+  const memory = {
+    archive: [1, 2, 3, 4].map((n) => ({ ...archiveEntryForRound(makeRound(n)), index: { title: `标题${n}` } }))
+  };
+  const recalls = finalizeRecallSelections(memory, [
+    { turnId: 'turn-1', level: 'high' },
+    { turnId: 'turn-2', level: 'medium' },
+    { turnId: 'turn-3', level: 'low' },
+    { turnId: 'turn-4', level: 'high' }
+  ], 'normal');
+  assert.equal(recalls.length, 3);
+  assert.equal(recalls.find((r) => r.turnId === 'turn-2').detail, false);
+  assert.equal(recalls.find((r) => r.turnId === 'turn-1').detail, true);
+  assert.equal(recalls.find((r) => r.turnId === 'turn-4').detail, true);
+  assert.equal(finalizeRecallSelections(memory, [{ turnId: 'turn-1', level: 'high' }], 'none').length, 0);
+});
+
+test('长线回顾最多 16 条；索引卡按 200 张分批', () => {
+  const memory = {
+    archive: Array.from({ length: 20 }, (_, i) => ({
+      ...archiveEntryForRound(makeRound(i + 1)), index: { title: `标题${i + 1}` }
+    }))
+  };
+  const rows = memory.archive.map((entry) => ({ turnId: entry.turnId, level: 'high' }));
+  assert.equal(finalizeRecallSelections(memory, rows, 'review').length, 16);
+  const cards = Array.from({ length: 450 }, (_, i) => ({ turnId: `t${i}` }));
+  assert.deepEqual(chunkRecallCards(cards).map((c) => c.length), [200, 200, 50]);
 });
 
 test('快速连发兜底：倒数第二轮未入库或版本变化时增加原文窗口', () => {
