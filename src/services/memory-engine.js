@@ -4,6 +4,7 @@
 import { getConfig, saveChat } from './storage.js';
 import { sendChat } from './api.js';
 import { resolveMemoryApi, trimAssistantForMemory, extractMemoryCorrections } from './api-memory.js';
+import { stripStatusBlocks } from './world-book.js';
 
 export const RECENT_RAW_TURNS = 1;
 export const MEMORY_ENGINE_VERSION = 'archive-v1';
@@ -448,10 +449,11 @@ export function finalizeRecallSelections(memory, rows, scope = 'normal') {
   return valid;
 }
 
-async function requestRecallBatch(api, cards, query) {
+async function requestRecallBatch(api, cards, query, phase = 'coarse') {
+  const finalPhase = phase === 'final';
   const prompt = `请从索引卡中找出本轮真正需要的历史记忆。允许一个也不选，禁止为凑数而选。
 
-只输出 JSON：{"scope":"none/normal/specific/review","recall":[{"turnId":"原id","level":"high/medium/low","reason":"一句理由","includeContext":false}]}
+只输出 JSON：{"rewrittenQuery":"结合上下文后的明确检索意图","needsRerank":false,"scope":"none/normal/specific/review","recall":[{"turnId":"原id","level":"high/medium/low","reason":"一句理由","includeContext":false}]}
 turnId 必须照抄。scope 含义：none=当前状态足够或无历史需要；normal=普通续写；specific=针对某件旧事；review=明确要求回顾一段长期关系/事件线。
 
 选择纪律：
@@ -460,9 +462,14 @@ turnId 必须照抄。scope 含义：none=当前状态足够或无历史需要�
 3. 普通续写默认少选或不选；specific 围绕一件事，不多带其他经历；review 才选择多个关键节点。
 4. 同一事件的多轮过程不得全选：普通问题选最直接一轮；长线回顾选起点/转折/结果/最新进展。
 5. 最近一轮已直接携带，不要选排除项。需要前因后果时才设 includeContext=true。
+6. 粗筛时先结合行动选项、当前状态与最近对话，把“她/那件事/还记得吗”等模糊说法改写为 rewrittenQuery；只能明确已有指代，禁止添加未发生的事实。specific/review 必须 needsRerank=true；normal 仅在指代仍不清楚或多个候选相似、需要辨析时设为 true。
+7. ${finalPhase ? '本次是复选：依据已明确检索意图严格精选，不得选择候选卡之外的 turnId。部分候选卡附 original 核验原文：必须据原文确认是否真能回答问题，摘要与原文冲突时以原文为准；只有能直接回答问题的才可标 high。未附原文的候选仍按索引判断，不得因此直接丢弃或降级。' : '本次是粗筛：保留真正相关的候选，但不要为凑数放宽到纯人名或宽泛话题重合。'}
 
 【本轮输入】
 ${String(query.userMessage || '')}
+
+【已明确检索意图】
+${String(query.rewrittenQuery || '尚未改写')}
 
 【行动选项解析（与主 API 共用）】
 ${String(query.actionContext || '自由输入或无可用选项')}
@@ -483,10 +490,89 @@ ${JSON.stringify(cards)}`;
   const parsed = parseJson(raw);
   const rows = Array.isArray(parsed) ? parsed : (parsed && (parsed.recall || parsed.recalls)) || [];
   const scope = parsed && !Array.isArray(parsed) && ['none', 'normal', 'specific', 'review'].includes(parsed.scope) ? parsed.scope : 'normal';
-  return { rows: Array.isArray(rows) ? rows : [], scope };
+  const rewrittenQuery = parsed && !Array.isArray(parsed) ? String(parsed.rewrittenQuery || '').trim().slice(0, 240) : '';
+  const needsRerank = Boolean(parsed && !Array.isArray(parsed) && parsed.needsRerank === true);
+  return { rows: Array.isArray(rows) ? rows : [], scope, rewrittenQuery, needsRerank };
 }
 
-/** 主回复前：少量一次检索；超过 200 张卡分批并行初筛，再对候选汇总复选。 */
+function recallCandidateCards(cards, rows) {
+  const ids = new Set(rows.map((row) => String(row && (row.turnId || row.id) || '')));
+  return cards.filter((card) => ids.has(card.turnId));
+}
+
+function rowsFromCandidates(rows, candidateCards) {
+  const allowed = new Set(candidateCards.map((card) => card.turnId));
+  return rows.filter((row) => allowed.has(String(row && (row.turnId || row.id) || '')));
+}
+
+/** 只在既有复选请求中附少量清理后的原文；其他候选仍保留索引卡。 */
+export function withRecallOriginals(candidateCards, rows, scope, messages) {
+  if (!Array.isArray(messages) || !messages.length) return candidateCards;
+  const rowInfo = new Map(rows.map((row, index) => [String(row && (row.turnId || row.id) || ''), { row, index }]));
+  const levelRank = (level) => level === 'high' ? 0 : (level === 'medium' ? 1 : 2);
+  const prioritized = candidateCards.map((card) => ({ card, info: rowInfo.get(card.turnId) }))
+    .filter((item) => item.info && item.info.row.level !== 'low')
+    .sort((a, b) => levelRank(a.info.row.level) - levelRank(b.info.row.level) || a.info.index - b.info.index);
+  const limit = scope === 'review' ? 6 : (scope === 'specific' ? 4 : 3);
+  const detailed = new Set(prioritized.slice(0, limit).map((item) => item.card.turnId));
+  return candidateCards.map((card) => {
+    if (!detailed.has(card.turnId)) return card;
+    const raw = readArchivedTurn(messages, card.turnId);
+    if (!raw) return card;
+    return {
+      ...card,
+      original: {
+        userText: raw.userText,
+        assistantText: stripStatusBlocks(raw.assistantText).replace(/\n{3,}/g, '\n\n').trim()
+      }
+    };
+  });
+}
+
+/** 查询改写并入粗筛；普通且明确时一次完成，复杂回忆或大量索引才复选并核验少量原文。 */
+export async function runRecallPipeline(cards, query, request) {
+  const batches = chunkRecallCards(cards);
+  let scope = 'normal';
+  let rows = [];
+  let rewrittenQuery = '';
+  let reranked = false;
+  if (batches.length === 1) {
+    const result = await request(batches[0], query, 'coarse');
+    rows = result.rows;
+    scope = result.scope;
+    rewrittenQuery = result.rewrittenQuery || '';
+    const candidateCards = recallCandidateCards(cards, rows);
+    const needsRerank = result.needsRerank || scope === 'specific' || scope === 'review';
+    if (candidateCards.length && needsRerank) {
+      const finalCards = withRecallOriginals(candidateCards, rows, scope, query.messages);
+      const merged = await request(finalCards, { ...query, recallScope: scope, rewrittenQuery }, 'final');
+      rows = rowsFromCandidates(merged.rows, candidateCards);
+      scope = merged.scope;
+      rewrittenQuery = merged.rewrittenQuery || rewrittenQuery;
+      reranked = true;
+    }
+  } else {
+    const settled = await Promise.allSettled(batches.map((batch) => request(batch, query, 'coarse')));
+    const successful = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+    if (!successful.length) throw new Error('所有记忆分批检索均失败');
+    const primary = successful.slice().sort((a, b) => recallScopeRank(b.scope) - recallScopeRank(a.scope))[0];
+    rows = successful.flatMap((r) => r.rows);
+    scope = primary.scope || 'normal';
+    rewrittenQuery = primary.rewrittenQuery || successful.find((r) => r.rewrittenQuery)?.rewrittenQuery || '';
+    const candidateCards = recallCandidateCards(cards, rows);
+    if (candidateCards.length) {
+      const finalCards = withRecallOriginals(candidateCards, rows, scope, query.messages);
+      const merged = await request(finalCards, { ...query, recallScope: scope, rewrittenQuery }, 'final');
+      rows = rowsFromCandidates(merged.rows, candidateCards);
+      scope = merged.scope;
+      rewrittenQuery = merged.rewrittenQuery || rewrittenQuery;
+      reranked = true;
+    }
+  }
+  return { rows, scope, rewrittenQuery, reranked };
+}
+
+/** 主回复前：查询改写与粗筛一次完成；仅复杂回忆复选，超过 200 张卡仍分批并行。 */
 export async function selectMemoryRecalls(memory, query = {}) {
   ensureMemoryEngine(memory);
   const excluded = new Set(query.excludeTurnIds || []);
@@ -495,28 +581,9 @@ export async function selectMemoryRecalls(memory, query = {}) {
   const config = await getConfig();
   const api = memoryApiOrThrow(config);
   const cards = candidates.map((entry) => ({ turnId: entry.turnId, round: entry.round, ...entry.index }));
-  const batches = chunkRecallCards(cards);
-  let scope = 'normal';
-  let rows = [];
-  if (batches.length === 1) {
-    const result = await requestRecallBatch(api, batches[0], query);
-    rows = result.rows;
-    scope = result.scope;
-  } else {
-    const settled = await Promise.allSettled(batches.map((batch) => requestRecallBatch(api, batch, query)));
-    const successful = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
-    if (!successful.length) throw new Error('所有记忆分批检索均失败');
-    rows = successful.flatMap((r) => r.rows);
-    scope = successful.map((r) => r.scope).sort((a, b) => recallScopeRank(b) - recallScopeRank(a))[0] || 'normal';
-    const ids = new Set(rows.map((r) => String(r && (r.turnId || r.id) || '')));
-    const candidateCards = cards.filter((card) => ids.has(card.turnId));
-    if (candidateCards.length) {
-      const merged = await requestRecallBatch(api, candidateCards, { ...query, recallScope: scope });
-      rows = merged.rows;
-      scope = merged.scope;
-    }
-  }
-  const recalls = finalizeRecallSelections(memory, rows, scope);
+  const result = await runRecallPipeline(cards, query,
+    (batch, batchQuery, phase) => requestRecallBatch(api, batch, batchQuery, phase));
+  const recalls = finalizeRecallSelections(memory, result.rows, result.scope);
   const selections = recalls.map((recall) => ({
     turnId: recall.turnId,
     level: recall.level,
@@ -527,7 +594,9 @@ export async function selectMemoryRecalls(memory, query = {}) {
     createdAt: new Date().toISOString(),
     userText: String(query.userMessage || ''),
     actionContext: String(query.actionContext || ''),
-    scope,
+    rewrittenQuery: result.rewrittenQuery,
+    reranked: result.reranked,
+    scope: result.scope,
     turnIds: selections.map((s) => s.turnId),
     levels: selections.map((s) => s.level),
     reasons: selections.map((s) => s.reason).filter(Boolean)

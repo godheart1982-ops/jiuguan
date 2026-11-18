@@ -4,7 +4,7 @@ import {
   ensureMemoryEngine, emptyMemoryState, turnIdOf, archiveEntryForRound,
   applyMemoryStatePatch, formatMemoryState, formatRecalledTurns,
   needsMemoryRawFallback, markMessageMemoryEdited, truncateMemoryForResend, readArchivedTurn,
-  finalizeRecallSelections, chunkRecallCards
+  finalizeRecallSelections, chunkRecallCards, runRecallPipeline, withRecallOriginals
 } from '../src/services/memory-engine.js';
 
 function makeRound(n, userText = `输入${n}`, aiText = `回复${n}`) {
@@ -184,4 +184,116 @@ test('编辑重发：截断目标及之后档案并恢复重发点前状态', ()
   assert.equal(chat.memory.archive.length, 1);
   assert.equal(chat.memory.state.scene, '第一轮后');
   assert.equal(chat.memory.recallLog.length, 0);
+});
+
+
+test('查询改写并入粗筛：普通且明确时不增加复选调用', async () => {
+  const cards = [{ turnId: 'turn-1' }, { turnId: 'turn-2' }];
+  const calls = [];
+  const result = await runRecallPipeline(cards, { userMessage: '继续' }, async (batch, query, phase) => {
+    calls.push({ batch, query, phase });
+    return {
+      rows: [{ turnId: 'turn-1', level: 'medium' }],
+      scope: 'normal', rewrittenQuery: '继续当前互动', needsRerank: false
+    };
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].phase, 'coarse');
+  assert.equal(result.rewrittenQuery, '继续当前互动');
+  assert.equal(result.reranked, false);
+  assert.equal(result.rows[0].turnId, 'turn-1');
+});
+
+test('特定旧事复选：携带改写意图，且不得扩大到粗筛候选之外', async () => {
+  const cards = [{ turnId: 'turn-1' }, { turnId: 'turn-2' }, { turnId: 'turn-3' }];
+  const calls = [];
+  const result = await runRecallPipeline(cards, { userMessage: '她还记得那件事吗' }, async (batch, query, phase) => {
+    calls.push({ batch, query, phase });
+    if (phase === 'coarse') {
+      return {
+        rows: [{ turnId: 'turn-1', level: 'medium' }, { turnId: 'turn-2', level: 'medium' }],
+        scope: 'specific', rewrittenQuery: '林雪是否记得上周的约定', needsRerank: true
+      };
+    }
+    return {
+      rows: [{ turnId: 'turn-2', level: 'high' }, { turnId: 'turn-3', level: 'high' }],
+      scope: 'specific', rewrittenQuery: '', needsRerank: false
+    };
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].phase, 'final');
+  assert.equal(calls[1].query.rewrittenQuery, '林雪是否记得上周的约定');
+  assert.deepEqual(calls[1].batch.map((card) => card.turnId), ['turn-1', 'turn-2']);
+  assert.deepEqual(result.rows.map((row) => row.turnId), ['turn-2']);
+  assert.equal(result.reranked, true);
+});
+
+test('大量索引保持分批粗筛与汇总复选，并传递改写意图', async () => {
+  const cards = Array.from({ length: 201 }, (_, i) => ({ turnId: `turn-${i + 1}` }));
+  const calls = [];
+  const result = await runRecallPipeline(cards, { userMessage: '回顾我们的关系' }, async (batch, query, phase) => {
+    calls.push({ batch, query, phase });
+    if (phase === 'final') {
+      return {
+        rows: [{ turnId: 'turn-201', level: 'high' }],
+        scope: 'review', rewrittenQuery: '', needsRerank: false
+      };
+    }
+    const isLastBatch = batch.some((card) => card.turnId === 'turn-201');
+    return {
+      rows: isLastBatch ? [{ turnId: 'turn-201', level: 'medium' }] : [],
+      scope: isLastBatch ? 'review' : 'normal',
+      rewrittenQuery: isLastBatch ? '回顾主控与林雪的关系关键节点' : '',
+      needsRerank: true
+    };
+  });
+  assert.equal(calls.filter((call) => call.phase === 'coarse').length, 2);
+  assert.equal(calls.filter((call) => call.phase === 'final').length, 1);
+  assert.equal(calls.at(-1).query.rewrittenQuery, '回顾主控与林雪的关系关键节点');
+  assert.equal(result.rows[0].turnId, 'turn-201');
+  assert.equal(result.scope, 'review');
+});
+
+
+test('复选原文：按场景限量，剥离状态栏与行动选项，其余候选保留索引', () => {
+  const rounds = Array.from({ length: 7 }, (_, i) => makeRound(
+    i + 1,
+    `输入${i + 1}`,
+    `正文${i + 1}\n\n\`\`\`\n📅日期：11月18日\n\`\`\`\n\n>### 行动选项\n1. 其他可能`
+  ));
+  const messages = rounds.flatMap((round) => [round.user, round.assistant]);
+  const cards = rounds.map((round) => ({ turnId: round.user.turnId, title: `标题${round.user.round}` }));
+  const rows = cards.map((card) => ({ turnId: card.turnId, level: 'high' }));
+  for (const [scope, limit] of [['normal', 3], ['specific', 4], ['review', 6]]) {
+    const result = withRecallOriginals(cards, rows, scope, messages);
+    assert.equal(result.filter((card) => card.original).length, limit);
+    assert.equal(result.length, cards.length);
+    assert.equal(result[0].original.userText, '输入1');
+    assert.equal(result[0].original.assistantText, '正文1');
+    assert.equal(result[limit].original, undefined);
+  }
+});
+
+test('候选原文只进入既有复选请求，粗筛不携带且调用次数不增加', async () => {
+  const rounds = [makeRound(1), makeRound(2)];
+  const messages = rounds.flatMap((round) => [round.user, round.assistant]);
+  const cards = rounds.map((round) => ({ turnId: round.user.turnId }));
+  const calls = [];
+  await runRecallPipeline(cards, { userMessage: '当时发生了什么', messages }, async (batch, query, phase) => {
+    calls.push({ batch, query, phase });
+    if (phase === 'coarse') {
+      assert.ok(batch.every((card) => !card.original));
+      return {
+        rows: cards.map((card) => ({ turnId: card.turnId, level: 'medium' })),
+        scope: 'specific', rewrittenQuery: '核对当时事件', needsRerank: true
+      };
+    }
+    assert.ok(batch.every((card) => card.original));
+    return {
+      rows: [{ turnId: 'turn-2', level: 'high' }],
+      scope: 'specific', rewrittenQuery: '', needsRerank: false
+    };
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].phase, 'final');
 });
