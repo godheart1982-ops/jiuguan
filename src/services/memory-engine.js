@@ -605,6 +605,29 @@ export async function selectMemoryRecalls(memory, query = {}) {
   return { selections, recalls };
 }
 
+export const RECENT_MEMORY_INDEX_LIMIT = 5;
+
+/** 最近 5 张索引提供常驻前情；召回与原文窗口优先，去重后不向更早补足。 */
+export function formatRecentMemoryIndexes(memory, options = {}) {
+  const archive = memory && Array.isArray(memory.archive) ? memory.archive : [];
+  const recalled = Array.isArray(options.recalledTurns) ? options.recalledTurns : [];
+  const rawWindow = Array.isArray(options.rawWindowTurnIds) ? options.rawWindowTurnIds : [];
+  const excluded = new Set(rawWindow.map(String));
+  for (const recall of recalled) {
+    const id = recall && (recall.turnId || recall.entry?.turnId);
+    if (id) excluded.add(String(id));
+  }
+  const entries = archive.filter((entry) => entry && entry.index).slice(-RECENT_MEMORY_INDEX_LIMIT)
+    .filter((entry) => !excluded.has(String(entry.turnId)));
+  if (!entries.length) return '';
+  const lines = entries.map((entry) => {
+    const title = String(entry.index.title || '相关对话').trim();
+    const summary = String(entry.index.summary || '').trim();
+    return `第 ${entry.round ?? '—'} 轮｜${title}：${summary}`;
+  });
+  return '【近期剧情脉络】（最近 5 轮索引摘要，仅用于了解前情；场景、衣着、情绪与数值以当前状态和最新原文为准）\n' + lines.join('\n');
+}
+
 export function formatRecalledTurns(recalls, messages = []) {
   if (!Array.isArray(recalls) || !recalls.length) return '';
   const byRound = (a, b) => (a.entry?.round || 0) - (b.entry?.round || 0);

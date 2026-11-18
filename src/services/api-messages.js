@@ -11,7 +11,7 @@ import { insertAuthorNote, shouldInjectAuthorNote, storyUserTurnCount } from './
 import { resolveWorldBookInjection } from './world-book.js';
 import { assembleCardDescription, buildOffscreenRosterBlock } from './card-modules.js';
 import { resolveCardPrompt } from './prompt-library.js';
-import { formatCurrentMemoryState, formatRecalledTurns, RECENT_RAW_TURNS } from './memory-engine.js';
+import { formatCurrentMemoryState, formatRecentMemoryIndexes, formatRecalledTurns, RECENT_RAW_TURNS } from './memory-engine.js';
 
 // 思维链预填充文本：开启后追加为 messages 最后一条 assistant 消息，强制模型从此处续写
 export const THINKING_PREFILL = '<思考>';
@@ -177,9 +177,14 @@ export async function buildMessages(character, historyMessages, userMessage, mem
 
   const memoryOn = character.memoryEnabled !== false;
 
-  // 新版记忆：当前状态常驻；发送前由副 API 选出的历史原文仅本轮注入
+  // 新版记忆：当前状态与近期索引常驻；发送前由副 API 选出的历史原文仅本轮注入
   const currentStateBlock = memoryOn ? formatCurrentMemoryState(memory) : '';
   if (currentStateBlock) systemContent += '\n\n' + currentStateBlock;
+  const recentIndexBlock = memoryOn ? formatRecentMemoryIndexes(memory, {
+    recalledTurns: options && options.recalledTurns,
+    rawWindowTurnIds: options && options.rawWindowTurnIds
+  }) : '';
+  if (recentIndexBlock) systemContent += '\n\n' + recentIndexBlock;
   const recalledBlock = memoryOn ? formatRecalledTurns(options && options.recalledTurns, historyMessages) : '';
   if (recalledBlock) systemContent += '\n\n' + recalledBlock;
 

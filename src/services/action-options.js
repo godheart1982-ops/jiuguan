@@ -42,7 +42,7 @@ function optionLineFor(content, number) {
 /** 开头编号即选项：2 / 1+3 / 选2再…… / 2再…… / 2，…… / 2 ……；后续文字均为补充。 */
 export function parseSelectedOptionNumbers(userMessage) {
   const text = String(userMessage || '').trim();
-  const combo = /^[1-7](?:\s*[+＋]\s*[1-7])+(?![+＋\d])/.exec(text);
+  const combo = /^[1-7](?:\s*[+＋]\s*[1-7])+(?!\d)/.exec(text);
   if (combo) return Array.from(combo[0].matchAll(/[1-7]/g), (m) => Number(m[0]));
   const pick = /^选\s*([1-7])(?=\D|$)/.exec(text);
   if (pick) return [Number(pick[1])];
@@ -55,7 +55,7 @@ export function extractActionOptionSupplement(userMessage) {
   const text = String(userMessage || '').trim();
   const prefix = /^(?:选\s*)?[1-7](?:\s*[+＋]\s*[1-7])*(?!\d)/.exec(text);
   if (!prefix) return '';
-  return text.slice(prefix[0].length).replace(/^(?:\s*[,，、;；]\s*|\s+|再\s*)/, '').trim();
+  return text.slice(prefix[0].length).replace(/^(?:\s*[,，、;；+＋]\s*|\s+|再\s*)/, '').trim();
 }
 
 /** 最近菜单仍完整出现在历史里，因此在本轮 user 旁声明其非事实属性与已选项。 */

@@ -153,12 +153,14 @@ export function createSendController(deps) {
 
       const history = chat.messages.slice(0, userIndex);
       let recalledTurns = [];
+      let rawWindowTurnIds = [];
       let rawWindowOverride = RECENT_RAW_TURNS;
       if (character.memoryEnabled !== false && !isMeta && chat.memory) {
         const pastRounds = getAllRounds(history).filter((r) => !r.user.meta);
         // 上一轮若还没来得及后台入库，临时多带一轮原文，不阻塞发送
         if (needsMemoryRawFallback(chat.memory, pastRounds)) rawWindowOverride = RECENT_RAW_TURNS + 1;
         const excludedTurnIds = pastRounds.slice(-rawWindowOverride).map(turnIdOf);
+        rawWindowTurnIds = excludedTurnIds;
         const hasIndex = Array.isArray(chat.memory.archive) && chat.memory.archive.some((a) => a && a.index && !excludedTurnIds.includes(a.turnId));
         if (hasIndex) {
           try {
@@ -196,6 +198,7 @@ export function createSendController(deps) {
           plot: chat.plot || null,
           authorNote: chat.authorNote || null,
           recalledTurns,
+          rawWindowTurnIds,
           rawWindowOverride
         }
       );

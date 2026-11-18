@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ensureMemoryEngine, emptyMemoryState, turnIdOf, archiveEntryForRound,
-  applyMemoryStatePatch, formatMemoryState, formatRecalledTurns,
+  applyMemoryStatePatch, formatMemoryState, formatRecentMemoryIndexes, formatRecalledTurns,
   needsMemoryRawFallback, markMessageMemoryEdited, truncateMemoryForResend, readArchivedTurn,
   finalizeRecallSelections, chunkRecallCards, runRecallPipeline, withRecallOriginals
 } from '../src/services/memory-engine.js';
@@ -296,4 +296,29 @@ test('候选原文只进入既有复选请求，粗筛不携带且调用次数�
   });
   assert.equal(calls.length, 2);
   assert.equal(calls[1].phase, 'final');
+});
+
+
+test('近期剧情脉络：只取最近 5 张，召回与原文窗口去重后不向更早补足', () => {
+  const memory = {
+    archive: Array.from({ length: 7 }, (_, i) => ({
+      turnId: `turn-${i + 1}`,
+      round: i + 1,
+      index: { title: `标题${i + 1}`, summary: `摘要${i + 1}`, keywords: ['不应注入的关键词'] }
+    }))
+  };
+  const text = formatRecentMemoryIndexes(memory, {
+    recalledTurns: [{ entry: { turnId: 'turn-4' } }],
+    rawWindowTurnIds: ['turn-7']
+  });
+  assert.ok(text.includes('近期剧情脉络'));
+  assert.ok(text.includes('第 3 轮｜标题3：摘要3'));
+  assert.ok(text.includes('第 5 轮｜标题5：摘要5'));
+  assert.ok(text.includes('第 6 轮｜标题6：摘要6'));
+  assert.ok(!text.includes('第 4 轮'));
+  assert.ok(!text.includes('第 7 轮'));
+  assert.ok(!text.includes('第 2 轮'));
+  assert.ok(!text.includes('不应注入的关键词'));
+  assert.ok(text.indexOf('第 3 轮') < text.indexOf('第 5 轮'));
+  assert.ok(text.indexOf('第 5 轮') < text.indexOf('第 6 轮'));
 });

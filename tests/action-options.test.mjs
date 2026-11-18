@@ -48,6 +48,9 @@ test('选择解析：单选、复合与各种文字补充简写', () => {
   assert.deepEqual(parseSelectedOptionNumbers('2怎么能这样'), [2]);
   assert.deepEqual(parseSelectedOptionNumbers('1+3再追问'), [1, 3]);
   assert.deepEqual(parseSelectedOptionNumbers('1+3 然后离开'), [1, 3]);
+  assert.deepEqual(parseSelectedOptionNumbers('1+2+其他指令'), [1, 2]);
+  assert.deepEqual(parseSelectedOptionNumbers('1+2+3+其他指令'), [1, 2, 3]);
+  assert.deepEqual(parseSelectedOptionNumbers('1＋2＋3＋其他指令'), [1, 2, 3]);
   assert.deepEqual(parseSelectedOptionNumbers('我拒绝'), []);
   assert.deepEqual(parseSelectedOptionNumbers('2026年'), []);
 });
@@ -59,6 +62,8 @@ test('选项补充：单选、多选与连接符后的自由指令均完整保�
   assert.equal(extractActionOptionSupplement('2怎么能这样'), '怎么能这样');
   assert.equal(extractActionOptionSupplement('1+3再追问'), '追问');
   assert.equal(extractActionOptionSupplement('1＋3 然后离开'), '然后离开');
+  assert.equal(extractActionOptionSupplement('1+2+其他指令'), '其他指令');
+  assert.equal(extractActionOptionSupplement('1+2+3+其他指令'), '其他指令');
   assert.equal(extractActionOptionSupplement('1+3'), '');
   assert.equal(extractActionOptionSupplement('我拒绝'), '');
 });
