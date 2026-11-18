@@ -4,6 +4,7 @@ import {
   stripActionOptions,
   trimHistoricalActionOptions,
   parseSelectedOptionNumbers,
+  extractActionOptionSupplement,
   buildActionOptionContext
 } from '../src/services/action-options.js';
 
@@ -49,6 +50,17 @@ test('选择解析：单选、复合与各种文字补充简写', () => {
   assert.deepEqual(parseSelectedOptionNumbers('1+3 然后离开'), [1, 3]);
   assert.deepEqual(parseSelectedOptionNumbers('我拒绝'), []);
   assert.deepEqual(parseSelectedOptionNumbers('2026年'), []);
+});
+
+test('选项补充：单选、多选与连接符后的自由指令均完整保留', () => {
+  assert.equal(extractActionOptionSupplement('6 其他指令'), '其他指令');
+  assert.equal(extractActionOptionSupplement('6，其他指令'), '其他指令');
+  assert.equal(extractActionOptionSupplement('选6再其他指令'), '其他指令');
+  assert.equal(extractActionOptionSupplement('2怎么能这样'), '怎么能这样');
+  assert.equal(extractActionOptionSupplement('1+3再追问'), '追问');
+  assert.equal(extractActionOptionSupplement('1＋3 然后离开'), '然后离开');
+  assert.equal(extractActionOptionSupplement('1+3'), '');
+  assert.equal(extractActionOptionSupplement('我拒绝'), '');
 });
 
 test('选择上下文：只把已选项列为行动核心，其余候选未发生', () => {

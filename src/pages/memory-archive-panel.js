@@ -5,6 +5,7 @@ import {
   processRoundForMemory, rebuildMemoryState, catchUpMemoryArchive, selectMemoryRecalls, readArchivedTurn
 } from '../services/memory-engine.js';
 import { getAllRounds, getLeadingGreeting } from './chat/chat-memory-helpers.js';
+import { extractActionOptionSupplement } from '../services/action-options.js';
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -160,7 +161,10 @@ export function renderMemoryArchivePanel(options) {
       }).join('、');
       const selectedActions = String(log.actionContext || '').match(/^第\d+条：.+$/gm) || [];
       const translatedInput = selectedActions.map((line) => line.replace(/^第\d+条：/, '')).join('；');
-      const inputText = translatedInput || String(log.userText || '');
+      const supplement = selectedActions.length ? extractActionOptionSupplement(log.userText) : '';
+      const inputText = translatedInput
+        ? translatedInput + (supplement ? `；补充：${supplement}` : '')
+        : String(log.userText || '');
       return `<div class="memory-card"><div style="font-size:12px;color:#888;">${escapeHtml(log.createdAt || '')}</div><div style="margin-top:4px;">输入：${escapeHtml(inputText)}</div><div style="margin-top:4px;color:#c9bda9;">命中：${escapeHtml(titles || '无')}</div>${log.reasons?.length ? `<div style="margin-top:4px;color:#999;">${escapeHtml(log.reasons.join('；'))}</div>` : ''}</div>`;
     }).join('');
     contentEl.innerHTML = `

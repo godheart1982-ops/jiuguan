@@ -50,6 +50,14 @@ export function parseSelectedOptionNumbers(userMessage) {
   return short ? [Number(short[1])] : [];
 }
 
+/** 取选项编号后的自由补充，供召回记录完整展示用户本轮意图。 */
+export function extractActionOptionSupplement(userMessage) {
+  const text = String(userMessage || '').trim();
+  const prefix = /^(?:选\s*)?[1-7](?:\s*[+＋]\s*[1-7])*(?!\d)/.exec(text);
+  if (!prefix) return '';
+  return text.slice(prefix[0].length).replace(/^(?:\s*[,，、;；]\s*|\s+|再\s*)/, '').trim();
+}
+
 /** 最近菜单仍完整出现在历史里，因此在本轮 user 旁声明其非事实属性与已选项。 */
 export function buildActionOptionContext(assistantContent, userMessage) {
   if (!hasActionOptions(assistantContent)) return '';
