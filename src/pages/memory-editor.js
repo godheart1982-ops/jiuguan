@@ -124,7 +124,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             <input type="number" class="form-input" id="mem-raw-window" style="width: 64px;" min="0" max="50" value="${character.memoryEnabled !== false ? 1 : (Number.isFinite(Number(character.rawWindowTurns)) ? Math.max(0, Math.min(50, Math.trunc(Number(character.rawWindowTurns)))) : 3)}" ${character.memoryEnabled !== false ? 'disabled' : ''}>
             <span>轮对话</span>
           </label>
-          <span class="memory-sys-hint">开启时：最近1轮 + 当前状态 + 原文召回；关闭后按设定轮数携带原文</span>
+          <span class="memory-sys-hint">开启时：最近1轮及未整理原文 + 当前状态 + 最近5索引 + 召回；关闭后按设定轮数携带原文</span>
         </div>
         <div class="memory-tabs">
           <div class="memory-tabs-row">

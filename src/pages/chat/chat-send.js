@@ -8,7 +8,7 @@ import { sendChat, sendChatStream } from '../../services/api.js';
 import { setRequestSessionId } from '../../services/api-headers.js';
 import { resolveMemoryApi } from '../../services/api-memory.js';
 import {
-  selectMemoryRecalls, catchUpMemoryArchive, needsMemoryRawFallback,
+  selectMemoryRecalls, catchUpMemoryArchive, getMemoryRawWindowSize,
   RECENT_RAW_TURNS, turnIdOf
 } from '../../services/memory-engine.js';
 import { buildActionOptionContext } from '../../services/action-options.js';
@@ -157,8 +157,8 @@ export function createSendController(deps) {
       let rawWindowOverride = RECENT_RAW_TURNS;
       if (character.memoryEnabled !== false && !isMeta && chat.memory) {
         const pastRounds = getAllRounds(history).filter((r) => !r.user.meta);
-        // 上一轮若还没来得及后台入库，临时多带一轮原文，不阻塞发送
-        if (needsMemoryRawFallback(chat.memory, pastRounds)) rawWindowOverride = RECENT_RAW_TURNS + 1;
+        // 本地检查总结进度：尚未整理的连续新轮次全部携带原文
+        rawWindowOverride = getMemoryRawWindowSize(chat.memory, pastRounds);
         const excludedTurnIds = pastRounds.slice(-rawWindowOverride).map(turnIdOf);
         rawWindowTurnIds = excludedTurnIds;
         const hasIndex = Array.isArray(chat.memory.archive) && chat.memory.archive.some((a) => a && a.index && !excludedTurnIds.includes(a.turnId));

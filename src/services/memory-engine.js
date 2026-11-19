@@ -362,16 +362,28 @@ export async function catchUpMemoryArchive(chat, character, rounds, hooks = {}) 
   return processed;
 }
 
-/** 快速连发时：倒数第二轮尚未入库则临时多带一轮原文。 */
-export function needsMemoryRawFallback(memory, rounds) {
+/** 本地检查整理进度：所有连续待整理的新轮次都带原文，直到最近一张有效索引。 */
+export function getMemoryRawWindowSize(memory, rounds) {
   const list = Array.isArray(rounds) ? rounds.filter((r) => !r.user.meta) : [];
-  if (list.length <= RECENT_RAW_TURNS) return false;
-  const target = list[list.length - 1 - RECENT_RAW_TURNS];
-  const entry = archiveEntryForRound(target);
-  const found = memory && Array.isArray(memory.archive)
-    ? memory.archive.find((a) => a.turnId === entry.turnId)
-    : null;
-  return !found || !found.index || found.revision !== entry.revision;
+  if (!list.length) return 0;
+  let size = Math.min(RECENT_RAW_TURNS, list.length);
+  const startedAt = memory && memory.engineStartedAt ? String(memory.engineStartedAt) : '';
+  for (let i = list.length - 1; i >= 0; i--) {
+    const round = list[i];
+    const entry = archiveEntryForRound(round);
+    if (startedAt && entry.turnTimestamp && entry.turnTimestamp < startedAt) break;
+    const found = memory && Array.isArray(memory.archive)
+      ? memory.archive.find((a) => a.turnId === entry.turnId)
+      : null;
+    if (found && found.index && found.revision === entry.revision) break;
+    size = list.length - i;
+  }
+  return Math.min(size, list.length);
+}
+
+/** 兼容旧调用：是否存在基础原文窗口之外的待整理轮次。 */
+export function needsMemoryRawFallback(memory, rounds) {
+  return getMemoryRawWindowSize(memory, rounds) > RECENT_RAW_TURNS;
 }
 
 /** 已入库轮次被编辑后：旧索引立即停用，当前状态等待手动重建；最新未入库轮次无需处理。 */
@@ -593,18 +605,20 @@ export async function selectMemoryRecalls(memory, query = {}) {
 
 export const RECENT_MEMORY_INDEX_LIMIT = 5;
 
-/** 最近 5 张索引提供常驻前情；召回与原文窗口优先，去重后不向更早补足。 */
+/** 先排除原文窗口再取最近 5 张；召回去重后不向更早补足。 */
 export function formatRecentMemoryIndexes(memory, options = {}) {
   const archive = memory && Array.isArray(memory.archive) ? memory.archive : [];
   const recalled = Array.isArray(options.recalledTurns) ? options.recalledTurns : [];
   const rawWindow = Array.isArray(options.rawWindowTurnIds) ? options.rawWindowTurnIds : [];
-  const excluded = new Set(rawWindow.map(String));
+  const rawExcluded = new Set(rawWindow.map(String));
+  const recallExcluded = new Set();
   for (const recall of recalled) {
     const id = recall && (recall.turnId || recall.entry?.turnId);
-    if (id) excluded.add(String(id));
+    if (id) recallExcluded.add(String(id));
   }
-  const entries = archive.filter((entry) => entry && entry.index).slice(-RECENT_MEMORY_INDEX_LIMIT)
-    .filter((entry) => !excluded.has(String(entry.turnId)));
+  const entries = archive.filter((entry) => entry && entry.index && !rawExcluded.has(String(entry.turnId)))
+    .slice(-RECENT_MEMORY_INDEX_LIMIT)
+    .filter((entry) => !recallExcluded.has(String(entry.turnId)));
   if (!entries.length) return '';
   const lines = entries.map((entry) => {
     const title = String(entry.index.title || '相关对话').trim();

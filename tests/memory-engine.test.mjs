@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ensureMemoryEngine, emptyMemoryState, turnIdOf, archiveEntryForRound,
   applyMemoryStatePatch, formatMemoryState, formatRecentMemoryIndexes, formatRecalledTurns,
-  needsMemoryRawFallback, markMessageMemoryEdited, truncateMemoryForResend, readArchivedTurn,
+  needsMemoryRawFallback, getMemoryRawWindowSize, markMessageMemoryEdited, truncateMemoryForResend, readArchivedTurn,
   finalizeRecallSelections, chunkRecallCards, runRecallPipeline
 } from '../src/services/memory-engine.js';
 
@@ -255,7 +255,7 @@ test('大量索引保持分批粗筛与汇总复选，并传递改写意图', as
 });
 
 
-test('近期剧情脉络：只取最近 5 张，召回与原文窗口去重后不向更早补足', () => {
+test('近期剧情脉络：先排原文窗口再取最近 5 张，召回去重后不补足', () => {
   const memory = {
     archive: Array.from({ length: 7 }, (_, i) => ({
       turnId: `turn-${i + 1}`,
@@ -268,15 +268,16 @@ test('近期剧情脉络：只取最近 5 张，召回与原文窗口去重后�
     rawWindowTurnIds: ['turn-7']
   });
   assert.ok(text.includes('近期剧情脉络'));
+  assert.ok(text.includes('第 2 轮｜标题2：摘要2'));
   assert.ok(text.includes('第 3 轮｜标题3：摘要3'));
   assert.ok(text.includes('第 5 轮｜标题5：摘要5'));
   assert.ok(text.includes('第 6 轮｜标题6：摘要6'));
   assert.ok(!text.includes('第 4 轮'));
   assert.ok(!text.includes('第 7 轮'));
-  assert.ok(!text.includes('第 2 轮'));
+  assert.ok(!text.includes('第 1 轮'));
   assert.ok(!text.includes('不应注入的关键词'));
+  assert.ok(text.indexOf('第 2 轮') < text.indexOf('第 3 轮'));
   assert.ok(text.indexOf('第 3 轮') < text.indexOf('第 5 轮'));
-  assert.ok(text.indexOf('第 5 轮') < text.indexOf('第 6 轮'));
 });
 
 
@@ -290,4 +291,23 @@ test('召回记录：初始化即裁剪为最近 20 条且保持幂等', () => {
   assert.equal(memory.recallLog.at(-1).id, 24);
   ensureMemoryEngine(memory);
   assert.equal(memory.recallLog.length, 20);
+});
+
+
+test('动态原文窗口：连续待整理轮次全部携带，遇到最近有效索引即停止', () => {
+  const rounds = [makeRound(1), makeRound(2), makeRound(3), makeRound(4)];
+  const memory = { archive: [] };
+  memory.archive.push({ ...archiveEntryForRound(rounds[0]), index: { title: '已整理1' } });
+  assert.equal(getMemoryRawWindowSize(memory, rounds), 3);
+  memory.archive.push({ ...archiveEntryForRound(rounds[1]), index: { title: '已整理2' } });
+  memory.archive.push({ ...archiveEntryForRound(rounds[2]), index: { title: '已整理3' } });
+  assert.equal(getMemoryRawWindowSize(memory, rounds), 1);
+  memory.archive[2].revision = 'stale';
+  assert.equal(getMemoryRawWindowSize(memory, rounds), 2);
+});
+
+test('动态原文窗口：不会把新记忆系统启用前的旧聊天全部卷入', () => {
+  const rounds = [makeRound(1), makeRound(2), makeRound(3), makeRound(4)];
+  const memory = { archive: [], engineStartedAt: 't3' };
+  assert.equal(getMemoryRawWindowSize(memory, rounds), 2);
 });
