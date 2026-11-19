@@ -47,6 +47,9 @@ test('输出模板与思维链：两套状态栏均使用常驻不在场NPC模�
     assert.ok(!preset.content.includes('👥场外动态'));
     assert.ok(preset.content.includes('显示被挤出≠记忆删除'));
     assert.ok(preset.content.includes('不等于主控知情'));
+    assert.ok(preset.content.includes('性癖记录纪律'));
+    assert.ok(preset.content.includes('喜欢某个体位'));
+    assert.ok(preset.content.includes('主控单方面的偏好'));
   }
   const thinking = PROMPT_PRESET_SEED.find((item) => item.id === 'thinking');
   assert.ok(thinking.content.includes('不在场重要NPC'));

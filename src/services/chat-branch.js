@@ -1,7 +1,7 @@
 // 对话分支：从任意一条消息开新线——该条及之前的消息与对应记忆快照复制成新对话，原线不动。
 // 新版原文记忆按永久 turnId 过滤，并恢复分支点最近的 stateAfter，而不是误用最新状态。
 
-import { emptyMemoryState, turnIdOf } from './memory-engine.js';
+import { emptyMemoryState, restoreMemoryStateSnapshot, turnIdOf } from './memory-engine.js';
 
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
@@ -29,7 +29,7 @@ export function buildBranchedChat(source, index, newId, nowIso) {
     const included = new Set(clone.messages.filter((m) => m.role === 'user').map((user) => turnIdOf({ user })));
     clone.memory.archive = clone.memory.archive.filter((entry) => included.has(entry.turnId));
     const snapshot = [...clone.memory.archive].reverse().find((entry) => entry && entry.stateAfter);
-    clone.memory.state = snapshot ? cloneJson(snapshot.stateAfter) : emptyMemoryState();
+    clone.memory.state = snapshot ? restoreMemoryStateSnapshot(snapshot.stateAfter, clone.memory) : emptyMemoryState();
     clone.memory.recallLog = [];
     delete clone.memory.pendingRecalls;
   }

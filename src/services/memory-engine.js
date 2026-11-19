@@ -25,6 +25,56 @@ export function emptyMemoryState() {
   };
 }
 
+const PROFILE_FIELDS = ['appearance', 'kinks', 'outerAura', 'innerAura'];
+const SNAPSHOT_PROFILE_FIELDS = ['kinks', 'outerAura', 'innerAura'];
+
+export function syncMemoryProfiles(memory, overwrite = false) {
+  if (!memory || typeof memory !== 'object') return memory;
+  if (!memory.profiles || typeof memory.profiles !== 'object' || Array.isArray(memory.profiles)) memory.profiles = {};
+  const characters = memory.state && Array.isArray(memory.state.characters) ? memory.state.characters : [];
+  for (const character of characters) {
+    const name = String(character && character.name || '').trim();
+    if (!name) continue;
+    const profile = memory.profiles[name] || {};
+    for (const field of PROFILE_FIELDS) {
+      const value = String(character[field] || '').trim();
+      if (value && (overwrite || !String(profile[field] || '').trim())) profile[field] = value;
+    }
+    memory.profiles[name] = profile;
+  }
+  return memory;
+}
+
+export function makeMemoryStateSnapshot(state) {
+  const snapshot = clone(state || emptyMemoryState());
+  for (const character of snapshot.characters || []) {
+    for (const field of SNAPSHOT_PROFILE_FIELDS) delete character[field];
+  }
+  return snapshot;
+}
+
+export function restoreMemoryStateSnapshot(snapshot, memory) {
+  const state = clone(snapshot || emptyMemoryState());
+  const profiles = memory && memory.profiles && typeof memory.profiles === 'object' ? memory.profiles : {};
+  for (const character of state.characters || []) {
+    const profile = profiles[String(character.name || '').trim()] || {};
+    for (const field of PROFILE_FIELDS) {
+      if (!String(character[field] || '').trim() && profile[field]) character[field] = profile[field];
+    }
+  }
+  return state;
+}
+
+function applyLockedProfiles(patch, profiles) {
+  for (const character of Array.isArray(patch && patch.characters) ? patch.characters : []) {
+    const profile = profiles[String(character.name || '').trim()] || {};
+    for (const field of PROFILE_FIELDS) {
+      if (!String(character[field] || '').trim() && profile[field]) character[field] = profile[field];
+    }
+  }
+  return patch;
+}
+
 export function ensureMemoryEngine(memory) {
   if (!memory || typeof memory !== 'object') return memory;
   if (!Array.isArray(memory.archive)) memory.archive = [];
@@ -45,6 +95,7 @@ export function ensureMemoryEngine(memory) {
   if (state.stale !== true) state.stale = false;
   if (!Array.isArray(memory.recallLog)) memory.recallLog = [];
   if (memory.recallLog.length > MEMORY_RECALL_LOG_LIMIT) memory.recallLog = memory.recallLog.slice(-MEMORY_RECALL_LOG_LIMIT);
+  syncMemoryProfiles(memory);
   memory.engine = MEMORY_ENGINE_VERSION;
   return memory;
 }
@@ -85,6 +136,13 @@ function stringArray(value, limit = 12) {
   return [...new Set(value.map((v) => String(v || '').trim()).filter(Boolean))].slice(0, limit);
 }
 
+export function sceneTimeFromText(text) {
+  const raw = String(text || '');
+  const date = /📅日期[:：]\s*([^🕑\n]+)/u.exec(raw);
+  const time = /🕑时间[:：]\s*([^【\n]+)/u.exec(raw);
+  return [date && date[1].trim(), time && time[1].trim()].filter(Boolean).join(' ');
+}
+
 function normalizeIndexCard(raw, fallbackText) {
   const card = raw && typeof raw === 'object' ? raw : {};
   const flat = String(fallbackText || '').replace(/\s+/g, ' ').trim();
@@ -93,7 +151,7 @@ function normalizeIndexCard(raw, fallbackText) {
     summary: String(card.summary || '').trim() || flat.slice(0, 160),
     characters: stringArray(card.characters, 12),
     location: String(card.location || '').trim(),
-    sceneTime: String(card.sceneTime || '').trim(),
+    sceneTime: String(card.sceneTime || sceneTimeFromText(fallbackText)).trim(),
     keywords: stringArray(card.keywords, 16),
     aliases: stringArray(card.aliases, 16),
     topics: stringArray(card.topics, 8),
@@ -138,6 +196,19 @@ export function readArchivedTurn(messages, entryOrId) {
     assistantText = `【开场白】\n${messages[0].content || ''}\n\n【本轮回复】\n${assistantText}`;
   }
   return { userText: String(round.user.content || ''), assistantText, round };
+}
+
+export function fillMissingIndexSceneTimes(archive, messages) {
+  let filled = 0;
+  for (const entry of Array.isArray(archive) ? archive : []) {
+    if (!entry || !entry.index || String(entry.index.sceneTime || '').trim()) continue;
+    const raw = readArchivedTurn(messages, entry);
+    const sceneTime = raw ? sceneTimeFromText(raw.assistantText) : '';
+    if (!sceneTime) continue;
+    entry.index.sceneTime = sceneTime;
+    filled++;
+  }
+  return filled;
 }
 
 function normalizeState(state) {
@@ -257,6 +328,24 @@ function memoryApiOrThrow(config) {
   return api;
 }
 
+export function memoryStateForRound(state, round) {
+  const source = state && typeof state === 'object' ? state : emptyMemoryState();
+  const raw = `${String(round && round.user && round.user.content || '')}\n${String(round && round.assistant && round.assistant.content || '')}`;
+  const characters = Array.isArray(source.characters)
+    ? source.characters.filter((character) => String(character.name || '').trim() && raw.includes(String(character.name || '').trim()))
+    : [];
+  return { ...source, characters };
+}
+
+export function characterCardForMemoryRound(character, state, round) {
+  const relevant = memoryStateForRound(state, round);
+  const existing = Array.isArray(state && state.characters) ? state.characters : [];
+  const needsCard = !existing.length || !relevant.characters.length || relevant.characters.some(
+    (item) => PROFILE_FIELDS.some((field) => !String(item[field] || '').trim())
+  );
+  return needsCard ? assembleCardDescription(character) : '';
+}
+
 /** 副 API 一次调用：生成一轮索引卡 + 增量状态补丁。 */
 export async function processRoundForMemory(round, context = {}) {
   const config = await getConfig();
@@ -271,10 +360,10 @@ export async function processRoundForMemory(round, context = {}) {
 
 只输出一个 JSON 对象：
 {
- "index":{"title":"含人名和事件的短标题","summary":"可独立阅读的一到两句摘要","characters":["全名"],"location":"地点","sceneTime":"剧情日期时间","keywords":["专名与关键概念"],"aliases":["以后提起此事的其他常见说法"],"topics":["关系/约定/亲密/工作/场外等"],"importance":1},
+ "index":{"title":"含人名和事件的短标题","summary":"可独立阅读的一到两句摘要","characters":["全名"],"location":"地点","sceneTime":"本轮剧情年月日+时分，必填","keywords":["专名与关键概念"],"aliases":["以后提起此事的其他常见说法"],"topics":["关系/约定/亲密/工作/场外等"],"importance":1},
  "statePatch":{
   "scene":"当前场景；无变化留空",
-  "characters":[{"name":"全名","presence":"在场/不在场；有变化才填","offscreen":"不在场重要NPC模块的最近状态，含最后确认时段","appearance":"一行当前外貌身材；含明确持续变化","kinks":"成年角色性癖；首次补全后固定","outerAura":"外人第一眼感受到的气质","innerAura":"实际内在气质","relation":"当前关系名分","stage":"阶段","scores":"只照抄状态栏三轴","mood":"当前情绪","goal":"当前目标","agreement":"已明确的关系约定","boundaries":"当前亲密接受边界","knowledge":"当前知道的关键情报","plans":"正在推进的个人计划","evidence":"本轮正文/状态栏证据，或首次设定补全"}],
+  "characters":[{"name":"全名","presence":"在场/不在场；有变化才填","offscreen":"不在场重要NPC模块的最近状态，含最后确认时段","appearance":"一行当前外貌身材；含明确持续变化","kinks":"成年角色稳定特殊XP；普通体位/力度/节奏偏好不算，首次补全后固定","outerAura":"外人第一眼感受到的气质","innerAura":"实际内在气质","relation":"当前关系名分","stage":"阶段","scores":"只照抄状态栏三轴","mood":"当前情绪","goal":"当前目标","agreement":"已明确的关系约定","boundaries":"当前亲密接受边界","knowledge":"当前知道的关键情报","plans":"正在推进的个人计划","evidence":"本轮正文/状态栏证据，或首次设定补全"}],
   "promises":[{"id":"旧条目id；新增留空","text":"约定","status":"open/done","due":"期限","evidence":"证据","op":"upsert/remove"}],
   "events":[{"id":"旧id/新增留空","text":"事件名","stage":"当前阶段","evidence":"证据","op":"upsert/remove"}],
   "intel":[{"id":"旧id/新增留空","text":"符合白名单的关系或秘密","knownBy":["当前全量知情人"],"evidence":"证据及提前知情会改变什么","op":"upsert/remove"}]
@@ -282,23 +371,26 @@ export async function processRoundForMemory(round, context = {}) {
 }
 
 硬性规则：
-1. 索引摘要必须写具体人名，禁止只用她/他/对方；keywords 与 aliases 用于以后找回这一轮详细原文。
+1. 索引摘要必须写具体人名，禁止只用她/他/对方；keywords 与 aliases 用于以后找回这一轮详细原文。sceneTime 必须从本轮状态栏📅日期与🕑时间提取完整剧情日期时间，禁止留空、只写时段或使用现实发送时间；状态栏缺失时才结合当前状态和上一轮时间合理补全。
 2. statePatch 只写变化项与首次缺失设定；没提到的旧数据保持原样。禁止因旧约定本轮没出现就标 done，删除必须 op=remove 且有明确依据。
 3. 本轮重要或持续互动人物首次进入账本，或上述固定字段仍为空时，必须补齐缺失值：角色卡已有内容优先照抄，缺失处结合年龄、职业、人设、正文与世界背景生成，生成后即为固定正史，后续不得重抽，只有怀孕、伤病、体重变化等明确事件才更新当前外貌。女性 appearance 包含神似明星、身高、体重、三围、罩杯；男性包含身高、体重、性器长度与粗度，数值须合理协调，明星不照抄示例且避免不同角色重复。一次性路人/功能NPC不要建立完整人物状态。
-4. kinks 只给成年角色生成；未成年角色不生成性癖或性器信息。性癖补全属于AI内部设定，不等于主控知情，也不等于角色会立即表现；一次亲密或被迫配合不自动新增永久性癖。外在/内在气质可以一致，禁止为反差而反差，内在气质不因一次失态永久重写。
+4. kinks 只给成年角色生成；未成年角色不生成性癖或性器信息。性癖是对特定情境、权力关系、对象特征或行为模式的稳定而特别的性唤起倾向，不是一切喜欢或舒服。首次补全可依据人设生成1-2项真正符合定义的特殊XP；后续新增必须有角色卡明示、角色明确自认，或至少两次不同场景主动寻求的稳定模式。喜欢某体位、快慢、力度、亲吻、拥抱、情话、普通地点、一般亲密行为、一次好奇/配合/高潮及主控单方面偏好均不算性癖，禁止换词包装后新增。性癖属于AI内部设定，不等于主控知情或角色会立即表现。外在/内在气质可以一致，禁止为反差而反差，内在气质不因一次失态永久重写。
 5. 发生关系不自动等于恋爱；炮友不自动获得恋人式占有权。一次亲密、心软或吃醋不得无依据改写永久人格、性观念或既有关系约定。
 6. 三轴数值只抄本轮状态栏，禁止估算；角色未出场则不要更新其数值。
 7. 「不在场重要NPC」有实际进展时，更新该人物 presence=不在场、offscreen 及有依据的 mood/goal/plans；只是照抄旧状态则不要重复上报。NPC实体入场时更新 presence=在场，offscreen 保留作最近场外衔接，不得覆盖当前正文。
 8. 场外地点绝不能覆盖主控所在的 scene。普通场外生活不得自动修改 relation/stage/scores/boundaries 或永久人格。场外旁白不等于主控知情。
 9. intel 只允许这些类别：未公开的恋爱/婚姻/血缘/真实身份；未公开怀孕/疾病/伤情；未公开离职/裁员/转学/财务危机；犯罪/报复/危险计划；明确要求保密的行程/约定/计划。且必须同时满足：至少一个相关者目前不能知道、提前知道会改变其台词/决定/冲突、有明确正文依据；缺一不加，拿不准不加。天气、衣着、普通地点、饮食、公开新闻/关系、普通情绪、一次性对话、一般喜好及当前状态可见事实禁止加入。
 10. 同一关系或秘密只保留一条，知情人增加必须用旧id更新全量 knownBy，不得新建重复条目；完全公开后可 op=remove，把事实留在人物状态或 events。有重要公共事件时才更新 events。
-11. 没有变化且没有首次补全需要时，对应数组输出 []。不要编造。
+11. 没有变化且没有首次补全需要时，对应数组输出 []。不要编造。已锁定固定档案中的值必须原样沿用、不得重抽；外貌只按原文明确后续事件更新。
 
 【当前状态账本（含旧条目id）】
 ${JSON.stringify(context.currentState || emptyMemoryState())}
 
 【角色卡设定（仅用于本轮人物首次或缺失字段初始化，不得每轮重抄）】
 ${String(context.characterCard || '').trim() || '无'}
+
+【已锁定人物固定档案（仅供重建时保留，不得重抽）】
+${JSON.stringify(context.lockedProfiles || {})}
 
 【对话补充设定（仅供理解，不入索引）】
 ${String(context.supplement || '').trim() || '无'}
@@ -327,7 +419,6 @@ export async function catchUpMemoryArchive(chat, character, rounds, hooks = {}) 
   ensureMemoryEngine(chat.memory);
   const list = Array.isArray(rounds) ? rounds.filter((r) => !r.user.meta) : [];
   const targets = list.slice(0, -RECENT_RAW_TURNS);
-  const characterCard = assembleCardDescription(character);
   let processed = 0;
   for (const round of targets) {
     const candidate = archiveEntryForRound(round, '');
@@ -339,11 +430,11 @@ export async function catchUpMemoryArchive(chat, character, rounds, hooks = {}) 
     hooks.onStatus?.(`正在整理第 ${candidate.round ?? '—'} 轮记忆…`, 'info');
     const greeting = processed === 0 && !chat.memory.archive.length ? (hooks.greeting || '') : '';
     const result = await processRoundForMemory(round, {
-      currentState: chat.memory.state,
+      currentState: memoryStateForRound(chat.memory.state, round),
       supplement: chat.memory.supplement || '',
       corrections: extractMemoryCorrections(round.assistant.content || ''),
       characterName: character.name || '',
-      characterCard,
+      characterCard: characterCardForMemoryRound(character, chat.memory.state, round),
       greeting
     });
     if (existing) {
@@ -352,7 +443,8 @@ export async function catchUpMemoryArchive(chat, character, rounds, hooks = {}) 
       chat.memory.state.stale = true;
     } else {
       chat.memory.state = applyMemoryStatePatch(chat.memory.state, result.statePatch, result.entry.turnId);
-      result.entry.stateAfter = clone(chat.memory.state);
+      syncMemoryProfiles(chat.memory);
+      result.entry.stateAfter = makeMemoryStateSnapshot(chat.memory.state);
       chat.memory.archive.push(result.entry);
     }
     processed++;
@@ -418,7 +510,7 @@ export function truncateMemoryForResend(chat, userMessage) {
     .filter((m) => m.role === 'user').map((user) => turnIdOf({ user })));
   chat.memory.archive = chat.memory.archive.filter((entry) => allowed.has(entry.turnId));
   const snapshot = [...chat.memory.archive].reverse().find((entry) => entry && entry.stateAfter);
-  chat.memory.state = snapshot ? clone(snapshot.stateAfter) : emptyMemoryState();
+  chat.memory.state = snapshot ? restoreMemoryStateSnapshot(snapshot.stateAfter, chat.memory) : emptyMemoryState();
   chat.memory.recallLog = [];
 }
 
@@ -486,7 +578,7 @@ turnId 必须照抄。scope 含义：none=当前状态足够或无历史需要�
 3. 普通续写默认少选或不选；specific 围绕一件事，不多带其他经历；review 才选择多个关键节点。
 4. 同一事件的多轮过程不得全选：普通问题选最直接一轮；长线回顾选起点/转折/结果/最新进展。
 5. 最近一轮已直接携带，不要选排除项。需要前因后果时才设 includeContext=true。
-6. 粗筛时先结合行动选项、当前状态与最近对话，把“她/那件事/还记得吗”等模糊说法改写为 rewrittenQuery；只能明确已有指代，禁止添加未发生的事实。specific/review 必须 needsRerank=true；normal 仅在指代仍不清楚或多个候选相似、需要辨析时设为 true。
+6. 粗筛时先结合行动选项、当前状态与最近对话，把“她/那件事/还记得吗”等模糊说法改写为 rewrittenQuery；只能明确已有指代，禁止添加未发生的事实。涉及“昨天/前天/上周/上次”等相对时间时，必须按当前剧情日期换算成绝对日期或日期范围写进 rewrittenQuery，只使用索引 sceneTime 消歧，禁止参考现实时间或 turnTimestamp。specific/review 在多个候选需要辨析或组织关键节点时设 needsRerank=true；只有一个明确候选可设 false。normal 仅在指代不清楚或候选相似时设为 true。
 7. ${finalPhase ? '本次是复选：依据已明确检索意图严格精选，不得选择候选卡之外的 turnId。' : '本次是粗筛：保留真正相关的候选，但不要为凑数放宽到纯人名或宽泛话题重合。'}
 
 【本轮输入】
@@ -497,6 +589,9 @@ ${String(query.rewrittenQuery || '尚未改写')}
 
 【行动选项解析（与主 API 共用）】
 ${String(query.actionContext || '自由输入或无可用选项')}
+
+【当前剧情时间（相对日期换算基准）】
+${String(query.currentState && query.currentState.scene || '未记录')}
 
 【当前状态（仅用于消歧）】
 ${formatMemoryState(query.currentState) || '无'}
@@ -542,7 +637,7 @@ export async function runRecallPipeline(cards, query, request) {
     scope = result.scope;
     rewrittenQuery = result.rewrittenQuery || '';
     const candidateCards = recallCandidateCards(cards, rows);
-    const needsRerank = result.needsRerank || scope === 'specific' || scope === 'review';
+    const needsRerank = result.needsRerank || (candidateCards.length > 1 && (scope === 'specific' || scope === 'review'));
     if (candidateCards.length && needsRerank) {
       const merged = await request(candidateCards, { ...query, recallScope: scope, rewrittenQuery }, 'final');
       rows = rowsFromCandidates(merged.rows, candidateCards);
@@ -623,7 +718,8 @@ export function formatRecentMemoryIndexes(memory, options = {}) {
   const lines = entries.map((entry) => {
     const title = String(entry.index.title || '相关对话').trim();
     const summary = String(entry.index.summary || '').trim();
-    return `第 ${entry.round ?? '—'} 轮｜${title}：${summary}`;
+    const sceneTime = String(entry.index.sceneTime || '时间未记录').trim();
+    return `第 ${entry.round ?? '—'} 轮｜${title}：${summary}｜时间：${sceneTime}`;
   });
   return '【近期剧情脉络】（最近 5 轮索引摘要，仅用于了解前情；场景、衣着、情绪与数值以当前状态和最新原文为准）\n' + lines.join('\n');
 }
@@ -634,13 +730,15 @@ export function formatRecalledTurns(recalls, messages = []) {
   const isDetail = (recall) => recall.detail === true || (recall.detail === undefined && recalls.length <= MEMORY_RECALL_DETAIL_LIMIT);
   const summaries = recalls.filter((recall) => !isDetail(recall)).sort(byRound).map((recall) => {
     const entry = recall.entry;
-    return `【历史摘要｜第 ${entry.round ?? '—'} 轮｜${entry.index?.title || '相关对话'}】${entry.index?.summary || ''}`;
+    const sceneTime = String(entry.index?.sceneTime || '时间未记录').trim();
+    return `【历史摘要｜第 ${entry.round ?? '—'} 轮｜${entry.index?.title || '相关对话'}｜时间：${sceneTime}】${entry.index?.summary || ''}`;
   });
   const details = recalls.filter(isDetail).sort(byRound).map((recall) => {
     const entry = recall.entry;
     const raw = entry && readArchivedTurn(messages, entry);
     if (!raw) return '';
-    const lines = [`【历史详细原文｜第 ${entry.round ?? '—'} 轮｜${entry.index?.title || '相关对话'}】`];
+    const sceneTime = String(entry.index?.sceneTime || '时间未记录').trim();
+    const lines = [`【历史详细原文｜第 ${entry.round ?? '—'} 轮｜${entry.index?.title || '相关对话'}｜时间：${sceneTime}】`];
     if (recall.before) lines.push('前情：' + recall.before);
     lines.push('用户：' + raw.userText, 'AI：' + raw.assistantText);
     if (recall.after) lines.push('后续：' + recall.after);
@@ -654,27 +752,30 @@ export function formatRecalledTurns(recalls, messages = []) {
 /** 从当前全部已入库原文重建状态；用于旧轮编辑后的手动修复。 */
 export async function rebuildMemoryState(chat, character, hooks = {}) {
   ensureMemoryEngine(chat.memory);
-  const characterCard = assembleCardDescription(character);
+  const lockedProfiles = clone(chat.memory.profiles || {});
   let state = emptyMemoryState();
   for (const entry of chat.memory.archive) {
     const round = roundFromMessages(chat.messages, entry.turnId);
     if (!round) continue;
     hooks.onStatus?.(`正在重建第 ${entry.round ?? '—'} 轮状态…`, 'info');
     const result = await processRoundForMemory(round, {
-      currentState: state,
+      currentState: memoryStateForRound(state, round),
       supplement: chat.memory.supplement || '',
       characterName: character.name || '',
-      characterCard,
+      characterCard: characterCardForMemoryRound(character, state, round),
+      lockedProfiles,
       greeting: entry.includeGreeting && chat.messages[0] && chat.messages[0].role === 'assistant' ? chat.messages[0].content : ''
     });
     entry.index = result.entry.index;
     entry.revision = result.entry.revision;
+    applyLockedProfiles(result.statePatch, lockedProfiles);
     state = applyMemoryStatePatch(state, result.statePatch, entry.turnId);
-    entry.stateAfter = clone(state);
+    entry.stateAfter = makeMemoryStateSnapshot(state);
     await saveChat(chat).catch(() => {});
   }
   state.stale = false;
   chat.memory.state = state;
+  syncMemoryProfiles(chat.memory);
   await saveChat(chat).catch(() => {});
   hooks.onStatus?.('当前状态已按原文重建', 'success');
 }

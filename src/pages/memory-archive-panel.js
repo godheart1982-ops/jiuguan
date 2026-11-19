@@ -2,7 +2,8 @@
 // 与插图、补充设定、剧情线等既有页签并存。
 
 import {
-  processRoundForMemory, rebuildMemoryState, catchUpMemoryArchive, selectMemoryRecalls, readArchivedTurn
+  processRoundForMemory, rebuildMemoryState, catchUpMemoryArchive, selectMemoryRecalls, readArchivedTurn,
+  fillMissingIndexSceneTimes
 } from '../services/memory-engine.js';
 import { getAllRounds, getLeadingGreeting } from './chat/chat-memory-helpers.js';
 import { extractActionOptionSupplement } from '../services/action-options.js';
@@ -15,7 +16,7 @@ function escapeHtml(text) {
 
 const CHARACTER_FIELDS = [
   ['presence', '在场状态'], ['offscreen', '最近场外状态'],
-  ['appearance', '外貌身材'], ['kinks', '性癖'],
+  ['appearance', '外貌身材'], ['kinks', '特殊性癖（体位/力度偏好不算）'],
   ['outerAura', '外在气质'], ['innerAura', '实际内在气质'],
   ['relation', '关系名分'], ['stage', '关系阶段'], ['scores', '三轴进度'],
   ['mood', '当前情绪'], ['goal', '当前目标'], ['agreement', '关系约定'],
@@ -119,6 +120,7 @@ export function renderMemoryArchivePanel(options) {
     const cards = items.map(({ entry, index: i }) => `
       <div class="memory-card">
         <div class="memory-card-header"><span class="memory-round-badge">第 ${entry.round ?? '—'} 轮</span><button class="btn btn-ghost btn-small archive-reindex" data-i="${i}">重建索引</button></div>
+        <input class="form-input archive-scene-time" data-i="${i}" value="${escapeHtml(entry.index?.sceneTime || '')}" placeholder="剧情日期时间，如2026年11月19日 15:30" style="margin-bottom:6px;">
         <input class="form-input archive-title" data-i="${i}" value="${escapeHtml(entry.index?.title || '')}" placeholder="索引标题" style="margin-bottom:6px;">
         <textarea class="form-textarea archive-summary" data-i="${i}" rows="2" placeholder="索引摘要">${escapeHtml(entry.index?.summary || '')}</textarea>
         <input class="form-input archive-keywords" data-i="${i}" value="${escapeHtml((entry.index?.keywords || []).join('、'))}" placeholder="关键词，顿号分隔" style="margin-top:6px;">
@@ -138,10 +140,11 @@ export function renderMemoryArchivePanel(options) {
         <div class="memory-section-title">对话索引（${archive.length}）</div>
         <div class="memory-section-hint" style="font-size:12px;color:#888;margin:2px 0 10px;">原文永久保留；这里只编辑用于查找它的目录。最新轮次优先，每页 ${ARCHIVE_PAGE_SIZE} 张；详细原文仅在展开时读取。索引可以手改或按原文重建。</div>
         <button class="btn btn-ghost btn-small" id="archive-catchup" style="margin-bottom:10px;">整理所有待入库轮次</button>
+        <button class="btn btn-ghost btn-small" id="archive-fill-times" style="margin:0 0 10px 6px;">本地补齐旧索引时间</button>
         ${pagination}
         <div class="memory-list">${cards || '<div class="memory-empty">暂无已入库轮次</div>'}</div>
       </div>`;
-    for (const [selector, key] of [['.archive-title', 'title'], ['.archive-summary', 'summary']]) {
+    for (const [selector, key] of [['.archive-scene-time', 'sceneTime'], ['.archive-title', 'title'], ['.archive-summary', 'summary']]) {
       contentEl.querySelectorAll(selector).forEach((el) => el.addEventListener('change', () => { (archive[el.dataset.i].index ||= {})[key] = el.value.trim(); onChange(); }));
     }
     for (const [selector, key] of [['.archive-keywords', 'keywords'], ['.archive-aliases', 'aliases']]) {
@@ -177,6 +180,11 @@ export function renderMemoryArchivePanel(options) {
         rerender();
       } catch (err) { alert('索引重建失败：' + err.message); el.disabled = false; }
     }));
+    contentEl.querySelector('#archive-fill-times').addEventListener('click', () => {
+      const filled = fillMissingIndexSceneTimes(archive, chat.messages);
+      if (filled) { onChange(); rerender(); }
+      alert(filled ? `已从原文补齐 ${filled} 条索引时间` : '没有可从原文补齐的缺失时间');
+    });
     contentEl.querySelector('#archive-catchup').addEventListener('click', async (e) => {
       e.target.disabled = true;
       try {

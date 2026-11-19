@@ -17,7 +17,7 @@ import { promptText } from '../utils/prompt-dialog.js';
 import { countTokens } from '../utils/tokenizer.js';
 import { openBigTextEditor } from '../utils/big-editor.js';
 import { renderMemoryArchivePanel } from './memory-archive-panel.js';
-import { emptyMemoryState, formatCurrentMemoryState, formatRecentMemoryIndexes } from '../services/memory-engine.js';
+import { emptyMemoryState, formatCurrentMemoryState, formatRecentMemoryIndexes, syncMemoryProfiles } from '../services/memory-engine.js';
 
 // 参考图上传前压缩：最长边 ≤1024px 转 jpeg（脸特征足够，省存储省上传）
 function resizeImageDataUrl(dataUrl, maxDim = 1024) {
@@ -1094,6 +1094,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       stateEdit.events = stateEdit.events.filter((e) => String(e.text || '').trim());
       stateEdit.intel = stateEdit.intel.filter((i) => String(i.text || '').trim());
       chat.memory.state = stateEdit;
+      syncMemoryProfiles(chat.memory, true);
       chat.memory.archive = archiveEdit;
       chat.memory.recallLog = recallLogEdit;
       chat.memory.shortTerm = newShortTerm;

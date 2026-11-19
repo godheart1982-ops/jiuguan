@@ -4,7 +4,9 @@ import {
   ensureMemoryEngine, emptyMemoryState, turnIdOf, archiveEntryForRound,
   applyMemoryStatePatch, formatMemoryState, formatRecentMemoryIndexes, formatRecalledTurns,
   needsMemoryRawFallback, getMemoryRawWindowSize, markMessageMemoryEdited, truncateMemoryForResend, readArchivedTurn,
-  finalizeRecallSelections, chunkRecallCards, runRecallPipeline
+  finalizeRecallSelections, chunkRecallCards, runRecallPipeline, sceneTimeFromText,
+  syncMemoryProfiles, makeMemoryStateSnapshot, restoreMemoryStateSnapshot,
+  memoryStateForRound, characterCardForMemoryRound, fillMissingIndexSceneTimes
 } from '../src/services/memory-engine.js';
 
 function makeRound(n, userText = `输入${n}`, aiText = `回复${n}`) {
@@ -310,4 +312,91 @@ test('动态原文窗口：不会把新记忆系统启用前的旧聊天全部�
   const rounds = [makeRound(1), makeRound(2), makeRound(3), makeRound(4)];
   const memory = { archive: [], engineStartedAt: 't3' };
   assert.equal(getMemoryRawWindowSize(memory, rounds), 2);
+});
+
+
+test('索引剧情时间：从状态栏提取完整日期时间，不使用现实发送时间', () => {
+  const text = '📅日期:2026年11月19日_星期四  🕑时间:18:05【按剧情推进】\n🗺️地点:家';
+  assert.equal(sceneTimeFromText(text), '2026年11月19日_星期四 18:05');
+  assert.equal(sceneTimeFromText('无状态栏'), '');
+});
+
+test('索引剧情时间：近期脉络和召回详细原文均显式携带', () => {
+  const round = makeRound(8);
+  const entry = {
+    ...archiveEntryForRound(round),
+    index: { title: '确认约定', summary: '林静与主控约定复诊', sceneTime: '2026年11月19日_星期四 18:05' }
+  };
+  const recent = formatRecentMemoryIndexes({ archive: [entry] });
+  assert.ok(recent.includes('时间：2026年11月19日_星期四 18:05'));
+  const recalled = formatRecalledTurns([{ entry, detail: true }], [round.user, round.assistant]);
+  assert.ok(recalled.includes('时间：2026年11月19日_星期四 18:05'));
+  const old = formatRecentMemoryIndexes({ archive: [{ ...entry, index: { title: '旧索引', summary: '旧摘要' } }] });
+  assert.ok(old.includes('时间：时间未记录'));
+});
+
+
+test('固定人物档案：快照省略固定字段并可从 profiles 完整恢复', () => {
+  const memory = {
+    state: {
+      ...emptyMemoryState(),
+      characters: [{
+        name: '林静', appearance: '神似新垣结衣；168cm', kinks: '被夸奖',
+        outerAura: '端庄', innerAura: '敏感', mood: '低落'
+      }]
+    }
+  };
+  syncMemoryProfiles(memory);
+  const snapshot = makeMemoryStateSnapshot(memory.state);
+  assert.equal(snapshot.characters[0].kinks, undefined);
+  assert.equal(snapshot.characters[0].outerAura, undefined);
+  assert.equal(snapshot.characters[0].appearance, '神似新垣结衣；168cm');
+  assert.equal(snapshot.characters[0].mood, '低落');
+  const restored = restoreMemoryStateSnapshot(snapshot, memory);
+  assert.equal(restored.characters[0].kinks, '被夸奖');
+  assert.equal(restored.characters[0].outerAura, '端庄');
+  assert.equal(restored.characters[0].innerAura, '敏感');
+});
+
+test('后台总结输入：只保留本轮相关人物，档案完整时不重复附角色卡', () => {
+  const complete = {
+    name: '林静', appearance: '168cm', kinks: '被夸奖', outerAura: '端庄', innerAura: '敏感'
+  };
+  const other = { ...complete, name: '苏晴' };
+  const state = { ...emptyMemoryState(), characters: [complete, other] };
+  const round = makeRound(1, '林静你好', '林静点头');
+  const relevant = memoryStateForRound(state, round);
+  assert.deepEqual(relevant.characters.map((c) => c.name), ['林静']);
+  const character = { background: '背景', characterModules: ['林静的角色设定', '苏晴的角色设定'] };
+  assert.equal(characterCardForMemoryRound(character, state, round), '');
+  const missing = { ...state, characters: [{ ...complete, appearance: '' }] };
+  assert.ok(characterCardForMemoryRound(character, missing, round).includes('林静的角色设定'));
+});
+
+test('旧索引时间：从对应原文本地补齐，不改已有时间', () => {
+  const first = makeRound(1, '你好', '📅日期:2026年11月19日_星期四  🕑时间:18:05【推进】');
+  const second = makeRound(2, '再见', '📅日期:2026年11月20日_星期五  🕑时间:09:00【推进】');
+  const archive = [
+    { ...archiveEntryForRound(first), index: { title: '一' } },
+    { ...archiveEntryForRound(second), index: { title: '二', sceneTime: '手动时间' } }
+  ];
+  const messages = [first.user, first.assistant, second.user, second.assistant];
+  assert.equal(fillMissingIndexSceneTimes(archive, messages), 1);
+  assert.equal(archive[0].index.sceneTime, '2026年11月19日_星期四 18:05');
+  assert.equal(archive[1].index.sceneTime, '手动时间');
+});
+
+test('单一明确旧事候选：无需第二次复选', async () => {
+  const cards = [{ turnId: 'turn-1' }, { turnId: 'turn-2' }];
+  let calls = 0;
+  const result = await runRecallPipeline(cards, {}, async () => {
+    calls++;
+    return {
+      rows: [{ turnId: 'turn-1', level: 'high' }],
+      scope: 'specific', rewrittenQuery: '明确旧事', needsRerank: false
+    };
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.reranked, false);
+  assert.equal(result.rows[0].turnId, 'turn-1');
 });
