@@ -17,7 +17,7 @@ import { promptText } from '../utils/prompt-dialog.js';
 import { countTokens } from '../utils/tokenizer.js';
 import { openBigTextEditor } from '../utils/big-editor.js';
 import { renderMemoryArchivePanel } from './memory-archive-panel.js';
-import { emptyMemoryState } from '../services/memory-engine.js';
+import { emptyMemoryState, formatCurrentMemoryState, formatRecentMemoryIndexes } from '../services/memory-engine.js';
 
 // 参考图上传前压缩：最长边 ≤1024px 转 jpeg（脸特征足够，省存储省上传）
 function resizeImageDataUrl(dataUrl, maxDim = 1024) {
@@ -209,9 +209,20 @@ export async function openMemoryEditor(chat, character, onUpdate) {
     if (counterTimer) clearTimeout(counterTimer);
     const update = () => {
       counterTimer = null;
-      const text = JSON.stringify({ state: stateEdit, archive: archiveEdit, recallLog: recallLogEdit, supplement: supplementEdit });
-      const tokens = countTokens(text);
-      counterEl.textContent = `${tokens} tokens`;
+      const residentText = [
+        formatCurrentMemoryState({ state: stateEdit }),
+        formatRecentMemoryIndexes({ archive: archiveEdit }),
+        supplementEdit.trim()
+      ].filter(Boolean).join('\n\n');
+      const indexText = JSON.stringify(archiveEdit.map((entry) => ({
+        turnId: entry.turnId,
+        round: entry.round,
+        ...(entry.index || {})
+      })));
+      const residentTokens = countTokens(residentText);
+      const indexTokens = countTokens(indexText);
+      counterEl.textContent = `常驻约 ${residentTokens}｜索引库约 ${indexTokens} tokens`;
+      counterEl.title = '常驻=当前状态+最近5张索引+补充；不统计聊天详细原文、stateAfter状态快照或召回记录';
     };
     if (immediate) update();
     else counterTimer = setTimeout(update, 300);

@@ -33,13 +33,13 @@ export function assembleCardDescription(character) {
   return parts.join('\n\n');
 }
 
-/** 场外动态角色名单（卡级 offscreenRoles）：非空时只有名单内角色拥有场外个人线；空 = AI 自行判断重要NPC。 */
+/** 不在场重要NPC名单（卡级 offscreenRoles）：非空时只有名单内角色拥有常驻场外状态；空 = AI 自行判断重要NPC。 */
 export function buildOffscreenRosterBlock(character) {
   const names = Array.isArray(character && character.offscreenRoles)
     ? character.offscreenRoles.map((n) => String(n || '').trim()).filter(Boolean)
     : [];
   if (!names.length) return '';
-  return '【场外动态角色名单】只有以下角色拥有场外个人线（不在场时也会自行行动、发生事件）：' +
+  return '【不在场重要NPC名单】只有以下角色拥有常驻场外状态（不在场时也会自行行动、发生事件）：' +
     names.join('、') +
-    '。名单之外的角色不生成场外动态，仅在当下场景需要时登场；名单内角色的场外动态遵守"跨时段必须推进至少1条、同时段不写，不得与正文事实冲突"。';
+    '。名单之外的角色不生成场外动态，仅在当下场景需要时登场；名单内角色每轮保留最近状态，跨时段至少推进1条、同时段照抄，入场离场或用户明确新信息立即更新，不得与正文事实冲突。';
 }

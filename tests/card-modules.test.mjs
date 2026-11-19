@@ -44,6 +44,8 @@ test('buildOffscreenRosterBlock: 空名单/缺字段返回空串（AI 自行判�
 test('buildOffscreenRosterBlock: 非空名单注入角色名与排他规则', () => {
   const block = buildOffscreenRosterBlock({ offscreenRoles: ['林静', ' 苏晴 '] });
   assert.ok(block.includes('林静、苏晴'));
+  assert.ok(block.includes('不在场重要NPC名单'));
   assert.ok(block.includes('名单之外的角色不生成场外动态'));
+  assert.ok(block.includes('同时段照抄'));
   assert.ok(block.includes('不得与正文事实冲突'));
 });

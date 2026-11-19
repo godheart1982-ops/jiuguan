@@ -4,12 +4,14 @@
 import { getConfig, saveChat } from './storage.js';
 import { sendChat } from './api.js';
 import { resolveMemoryApi, trimAssistantForMemory, extractMemoryCorrections } from './api-memory.js';
+import { assembleCardDescription } from './card-modules.js';
 
 export const RECENT_RAW_TURNS = 1;
 export const MEMORY_ENGINE_VERSION = 'archive-v1';
 export const MEMORY_RECALL_LIMIT = 16;
 export const RECALL_BATCH_SIZE = 200;
 export const MEMORY_RECALL_DETAIL_LIMIT = 2;
+export const MEMORY_RECALL_LOG_LIMIT = 20;
 
 export function emptyMemoryState() {
   return {
@@ -42,6 +44,7 @@ export function ensureMemoryEngine(memory) {
   if (typeof state.asOfTurn !== 'string') state.asOfTurn = '';
   if (state.stale !== true) state.stale = false;
   if (!Array.isArray(memory.recallLog)) memory.recallLog = [];
+  if (memory.recallLog.length > MEMORY_RECALL_LOG_LIMIT) memory.recallLog = memory.recallLog.slice(-MEMORY_RECALL_LOG_LIMIT);
   memory.engine = MEMORY_ENGINE_VERSION;
   return memory;
 }
@@ -150,7 +153,7 @@ function normalizeState(state) {
   };
 }
 
-const CHARACTER_FIELDS = ['relation', 'stage', 'scores', 'mood', 'goal', 'agreement', 'boundaries', 'knowledge', 'plans'];
+const CHARACTER_FIELDS = ['presence', 'offscreen', 'appearance', 'kinks', 'outerAura', 'innerAura', 'relation', 'stage', 'scores', 'mood', 'goal', 'agreement', 'boundaries', 'knowledge', 'plans'];
 
 function upsertById(list, item, kind, turnId) {
   if (!item || typeof item !== 'object') return;
@@ -216,13 +219,13 @@ export function formatMemoryState(stateRaw) {
     const details = CHARACTER_FIELDS
       .map((key) => [key, String(c[key] || '').trim()])
       .filter(([, value]) => value)
-      .map(([key, value]) => `${({ relation: '关系', stage: '阶段', scores: '进度', mood: '情绪', goal: '目标', agreement: '关系约定', boundaries: '亲密边界', knowledge: '知情', plans: '个人计划' })[key]}=${value}`);
+      .map(([key, value]) => `${({ presence: '在场状态', offscreen: '最近场外状态', appearance: '外貌身材', kinks: '性癖', outerAura: '外在气质', innerAura: '实际内在气质', relation: '关系', stage: '阶段', scores: '进度', mood: '情绪', goal: '目标', agreement: '关系约定', boundaries: '亲密边界', knowledge: '知情', plans: '个人计划' })[key]}=${value}`);
     if (c.name) lines.push(`人物【${c.name}】${details.join('；')}`);
   }
   const openPromises = state.promises.filter((p) => p.status !== 'done');
   if (openPromises.length) lines.push('未完成约定：' + openPromises.map((p) => `${p.text}${p.due ? `（${p.due}）` : ''}`).join('｜'));
   if (state.events.length) lines.push('进行中事件：' + state.events.map((e) => `${e.text}${e.stage ? `→${e.stage}` : ''}`).join('｜'));
-  if (state.intel.length) lines.push('知情情报：' + state.intel.map((i) => `${i.text}【可知：${(i.knownBy || []).join('、') || '暂无'}】`).join('｜'));
+  if (state.intel.length) lines.push('关系与秘密知情：' + state.intel.map((i) => `${i.text}【可知：${(i.knownBy || []).join('、') || '暂无'}】`).join('｜'));
   return lines.join('\n');
 }
 
@@ -230,7 +233,7 @@ export function formatCurrentMemoryState(memory) {
   if (!memory || !memory.state) return '';
   const body = formatMemoryState(memory.state);
   if (!body) return '';
-  return '【当前状态账本】（记录当前有效状态；与最近一轮状态栏存在新旧差异时，以最近一轮为准。人物核心人格与基础性观念仍以角色卡为准）\n' + body;
+  return '【当前状态账本】（记录当前有效状态；与最近一轮状态栏存在新旧差异时，以最近一轮为准。角色卡提供初始人格、外貌与性癖，首次补全值和明确后续变化以账本为准，核心人格不得单轮骤变。人物已在场时，最近场外状态仅供衔接，不覆盖当前正文；场外旁白、性癖与内在气质均不等于主控知情）\n' + body;
 }
 
 function parseJson(raw) {
@@ -264,30 +267,38 @@ export async function processRoundForMemory(round, context = {}) {
     userText: String(round && round.user && round.user.content || ''),
     assistantText: context.greeting ? `【开场白】\n${context.greeting}\n\n【本轮回复】\n${rawReply}` : rawReply
   };
-  const prompt = `请为这一轮角色扮演对话建立“召回索引卡”，并只上报本轮真实发生的状态变化。
+  const prompt = `请为这一轮角色扮演对话建立“召回索引卡”，上报真实状态变化，并补全本轮重要人物首次缺失的固定设定。
 
 只输出一个 JSON 对象：
 {
  "index":{"title":"含人名和事件的短标题","summary":"可独立阅读的一到两句摘要","characters":["全名"],"location":"地点","sceneTime":"剧情日期时间","keywords":["专名与关键概念"],"aliases":["以后提起此事的其他常见说法"],"topics":["关系/约定/亲密/工作/场外等"],"importance":1},
  "statePatch":{
   "scene":"当前场景；无变化留空",
-  "characters":[{"name":"全名","relation":"当前关系名分","stage":"阶段","scores":"只照抄状态栏三轴","mood":"当前情绪","goal":"当前目标","agreement":"已明确的关系约定","boundaries":"当前亲密接受边界","knowledge":"当前知道的关键情报","plans":"正在推进的个人计划","evidence":"本轮正文证据"}],
+  "characters":[{"name":"全名","presence":"在场/不在场；有变化才填","offscreen":"不在场重要NPC模块的最近状态，含最后确认时段","appearance":"一行当前外貌身材；含明确持续变化","kinks":"成年角色性癖；首次补全后固定","outerAura":"外人第一眼感受到的气质","innerAura":"实际内在气质","relation":"当前关系名分","stage":"阶段","scores":"只照抄状态栏三轴","mood":"当前情绪","goal":"当前目标","agreement":"已明确的关系约定","boundaries":"当前亲密接受边界","knowledge":"当前知道的关键情报","plans":"正在推进的个人计划","evidence":"本轮正文/状态栏证据，或首次设定补全"}],
   "promises":[{"id":"旧条目id；新增留空","text":"约定","status":"open/done","due":"期限","evidence":"证据","op":"upsert/remove"}],
   "events":[{"id":"旧id/新增留空","text":"事件名","stage":"当前阶段","evidence":"证据","op":"upsert/remove"}],
-  "intel":[{"id":"旧id/新增留空","text":"秘密","knownBy":["当前全量知情人"],"evidence":"证据","op":"upsert/remove"}]
+  "intel":[{"id":"旧id/新增留空","text":"符合白名单的关系或秘密","knownBy":["当前全量知情人"],"evidence":"证据及提前知情会改变什么","op":"upsert/remove"}]
  }
 }
 
 硬性规则：
 1. 索引摘要必须写具体人名，禁止只用她/他/对方；keywords 与 aliases 用于以后找回这一轮详细原文。
-2. statePatch 只写变化项；没提到的旧数据保持原样。禁止因旧约定本轮没出现就标 done，删除必须 op=remove 且有明确依据。
-3. 发生关系不自动等于恋爱；炮友不自动获得恋人式占有权。一次亲密、心软或吃醋不得无依据改写永久人格、性观念或既有关系约定。
-4. 三轴数值只抄本轮状态栏，禁止估算；角色未出场则不要更新其数值。
-5. 场外个人线若本轮有实际进展，更新该人物的 plans/mood；公共事件更新 events；秘密知情变化更新 intel。
-6. 没有变化时对应数组输出 []。不要编造。
+2. statePatch 只写变化项与首次缺失设定；没提到的旧数据保持原样。禁止因旧约定本轮没出现就标 done，删除必须 op=remove 且有明确依据。
+3. 本轮重要或持续互动人物首次进入账本，或上述固定字段仍为空时，必须补齐缺失值：角色卡已有内容优先照抄，缺失处结合年龄、职业、人设、正文与世界背景生成，生成后即为固定正史，后续不得重抽，只有怀孕、伤病、体重变化等明确事件才更新当前外貌。女性 appearance 包含神似明星、身高、体重、三围、罩杯；男性包含身高、体重、性器长度与粗度，数值须合理协调，明星不照抄示例且避免不同角色重复。一次性路人/功能NPC不要建立完整人物状态。
+4. kinks 只给成年角色生成；未成年角色不生成性癖或性器信息。性癖补全属于AI内部设定，不等于主控知情，也不等于角色会立即表现；一次亲密或被迫配合不自动新增永久性癖。外在/内在气质可以一致，禁止为反差而反差，内在气质不因一次失态永久重写。
+5. 发生关系不自动等于恋爱；炮友不自动获得恋人式占有权。一次亲密、心软或吃醋不得无依据改写永久人格、性观念或既有关系约定。
+6. 三轴数值只抄本轮状态栏，禁止估算；角色未出场则不要更新其数值。
+7. 「不在场重要NPC」有实际进展时，更新该人物 presence=不在场、offscreen 及有依据的 mood/goal/plans；只是照抄旧状态则不要重复上报。NPC实体入场时更新 presence=在场，offscreen 保留作最近场外衔接，不得覆盖当前正文。
+8. 场外地点绝不能覆盖主控所在的 scene。普通场外生活不得自动修改 relation/stage/scores/boundaries 或永久人格。场外旁白不等于主控知情。
+9. intel 只允许这些类别：未公开的恋爱/婚姻/血缘/真实身份；未公开怀孕/疾病/伤情；未公开离职/裁员/转学/财务危机；犯罪/报复/危险计划；明确要求保密的行程/约定/计划。且必须同时满足：至少一个相关者目前不能知道、提前知道会改变其台词/决定/冲突、有明确正文依据；缺一不加，拿不准不加。天气、衣着、普通地点、饮食、公开新闻/关系、普通情绪、一次性对话、一般喜好及当前状态可见事实禁止加入。
+10. 同一关系或秘密只保留一条，知情人增加必须用旧id更新全量 knownBy，不得新建重复条目；完全公开后可 op=remove，把事实留在人物状态或 events。有重要公共事件时才更新 events。
+11. 没有变化且没有首次补全需要时，对应数组输出 []。不要编造。
 
 【当前状态账本（含旧条目id）】
 ${JSON.stringify(context.currentState || emptyMemoryState())}
+
+【角色卡设定（仅用于本轮人物首次或缺失字段初始化，不得每轮重抄）】
+${String(context.characterCard || '').trim() || '无'}
 
 【对话补充设定（仅供理解，不入索引）】
 ${String(context.supplement || '').trim() || '无'}
@@ -316,6 +327,7 @@ export async function catchUpMemoryArchive(chat, character, rounds, hooks = {}) 
   ensureMemoryEngine(chat.memory);
   const list = Array.isArray(rounds) ? rounds.filter((r) => !r.user.meta) : [];
   const targets = list.slice(0, -RECENT_RAW_TURNS);
+  const characterCard = assembleCardDescription(character);
   let processed = 0;
   for (const round of targets) {
     const candidate = archiveEntryForRound(round, '');
@@ -331,6 +343,7 @@ export async function catchUpMemoryArchive(chat, character, rounds, hooks = {}) 
       supplement: chat.memory.supplement || '',
       corrections: extractMemoryCorrections(round.assistant.content || ''),
       characterName: character.name || '',
+      characterCard,
       greeting
     });
     if (existing) {
@@ -574,7 +587,7 @@ export async function selectMemoryRecalls(memory, query = {}) {
     levels: selections.map((s) => s.level),
     reasons: selections.map((s) => s.reason).filter(Boolean)
   });
-  if (memory.recallLog.length > 50) memory.recallLog = memory.recallLog.slice(-50);
+  if (memory.recallLog.length > MEMORY_RECALL_LOG_LIMIT) memory.recallLog = memory.recallLog.slice(-MEMORY_RECALL_LOG_LIMIT);
   return { selections, recalls };
 }
 
@@ -627,6 +640,7 @@ export function formatRecalledTurns(recalls, messages = []) {
 /** 从当前全部已入库原文重建状态；用于旧轮编辑后的手动修复。 */
 export async function rebuildMemoryState(chat, character, hooks = {}) {
   ensureMemoryEngine(chat.memory);
+  const characterCard = assembleCardDescription(character);
   let state = emptyMemoryState();
   for (const entry of chat.memory.archive) {
     const round = roundFromMessages(chat.messages, entry.turnId);
@@ -636,6 +650,7 @@ export async function rebuildMemoryState(chat, character, hooks = {}) {
       currentState: state,
       supplement: chat.memory.supplement || '',
       characterName: character.name || '',
+      characterCard,
       greeting: entry.includeGreeting && chat.messages[0] && chat.messages[0].role === 'assistant' ? chat.messages[0].content : ''
     });
     entry.index = result.entry.index;

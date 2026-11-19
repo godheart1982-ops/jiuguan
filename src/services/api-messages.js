@@ -82,7 +82,7 @@ export async function buildMessages(character, historyMessages, userMessage, mem
     }
   }
 
-  // 场外动态角色名单（卡级）：非空时只有名单内角色拥有场外个人线，静态文本可进缓存
+  // 不在场重要NPC名单（卡级）：非空时只有名单内角色拥有常驻场外状态，静态文本可进缓存
   const offscreenRoster = buildOffscreenRosterBlock(character);
   if (offscreenRoster) {
     systemContent += '\n\n' + offscreenRoster;

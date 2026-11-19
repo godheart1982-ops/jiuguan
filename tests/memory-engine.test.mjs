@@ -278,3 +278,16 @@ test('近期剧情脉络：只取最近 5 张，召回与原文窗口去重后�
   assert.ok(text.indexOf('第 3 轮') < text.indexOf('第 5 轮'));
   assert.ok(text.indexOf('第 5 轮') < text.indexOf('第 6 轮'));
 });
+
+
+test('召回记录：初始化即裁剪为最近 20 条且保持幂等', () => {
+  const memory = {
+    recallLog: Array.from({ length: 25 }, (_, i) => ({ id: i, turnIds: [] }))
+  };
+  ensureMemoryEngine(memory);
+  assert.equal(memory.recallLog.length, 20);
+  assert.equal(memory.recallLog[0].id, 5);
+  assert.equal(memory.recallLog.at(-1).id, 24);
+  ensureMemoryEngine(memory);
+  assert.equal(memory.recallLog.length, 20);
+});
