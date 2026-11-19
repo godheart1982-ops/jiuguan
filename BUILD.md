@@ -82,6 +82,22 @@ versionName "2.1.147"   // 显示给用户的版本号
 
 Android 版本使用 Capacitor Filesystem 插件，数据存储在应用私有目录中。App 通过前台服务保持后台网络连接（首次启动会请求通知权限，用于显示前台服务通知）。
 
+### GitHub Release 备份
+
+每次 APK 打包并推送后，同时创建对应 Release 并上传 APK，避免只保存代码而丢失二进制产物。示例（替换版本号）：
+
+```bash
+gh release create v2.1.147 \
+  "android/app/build/outputs/apk/debug/app-debug.apk#jiuguan-2.1.147-debug.apk" \
+  --target main \
+  --title "Android 2.1.147" \
+  --notes "versionCode 201"
+
+gh release view v2.1.147 --json tagName,url,assets
+```
+
+上传后用第二条命令确认附件状态为 `uploaded`。历史 Release 可从仓库 Releases 页面下载。
+
 ## 网页版
 
 ### 打包

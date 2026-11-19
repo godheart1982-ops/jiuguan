@@ -5,6 +5,7 @@
 - **常规项目操作**：编辑/新建/删除项目内代码文件、运行测试（`npm test`）、lint、web/Android 资源构建、打包 APK（`npm run build:android`）。
 - **Git 操作**：本地 `git add` / `commit` / `checkout` / `branch` / `push` 到本仓库远程（github.com/godheart1982-ops/jiuguan，private）。每个阶段完成并验证通过后可顺手提交；推送在功能告一段落时进行。
 - **版本号惯例**：打包后必须检查 README 两行版本号与 `android/app/build.gradle` 一致（升版脚本只升 versionName，versionCode 需手动对齐），并保持 README 的 UTF-8 BOM。
+- **APK 备份惯例**：每次 APK 打包并推送后，为本版创建 GitHub Release（tag `v<versionName>`、target `main`），把 `app-debug.apk` 作为附件上传并核验 `assets`；这是本仓库远程内的长期授权。
 
 仍需要先确认的（不可逆或超出项目目录的操作）：
 
