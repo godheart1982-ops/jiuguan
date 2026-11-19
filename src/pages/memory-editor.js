@@ -1,4 +1,4 @@
-// 记忆编辑器：🧠 全屏弹窗；当前状态/对话索引/召回记录 + 生图/补充/剧情辅助页签。
+// 记忆编辑器：🧠 全屏弹窗；当前状态/对话索引/长期记忆/召回记录 + 生图/补充/剧情辅助页签。
 // 自包含模块——自己建遮罩、绑事件、保存，输入仅 (chat, character, onUpdate)，与聊天页状态零耦合。
 // migrateMemory 也住在这里：它既被编辑器调用，也被聊天页打开旧对话时做结构迁移。
 import { saveCharacter, saveChat, saveAnchorRefImage, deleteAnchorRefImage, getGeneratedImageDataUrl, getPlotPresets, savePlotPreset, deletePlotPreset } from '../services/storage.js';
@@ -18,6 +18,8 @@ import { countTokens } from '../utils/tokenizer.js';
 import { openBigTextEditor } from '../utils/big-editor.js';
 import { renderMemoryArchivePanel } from './memory-archive-panel.js';
 import { emptyMemoryState, formatCurrentMemoryState, formatRecentMemoryIndexes, syncMemoryProfiles } from '../services/memory-engine.js';
+import { formatLongTermMemories } from '../services/memory-long-term.js';
+import { mergeMemoryEditorSnapshots } from '../services/memory-editor-merge.js';
 
 // 参考图上传前压缩：最长边 ≤1024px 转 jpeg（脸特征足够，省存储省上传）
 function resizeImageDataUrl(dataUrl, maxDim = 1024) {
@@ -62,11 +64,18 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   // 事实备忘（本地副本）；mcName：主控真名，关系端点归一化用（「主控」→真名）
   const mcName = (character && character.mainControl && character.mainControl.name) || '';
   let factsEdit = normalizeFacts(chat.memory.facts, mcName);
-  // 原文召回型记忆本地副本：状态账本 / 轮次索引 / 召回记录
+  // 混合记忆本地副本：状态账本 / 轮次索引 / 一级长期摘要 / 召回记录
   let stateEdit = JSON.parse(JSON.stringify(chat.memory.state || emptyMemoryState()));
   let archiveEdit = JSON.parse(JSON.stringify(chat.memory.archive || []));
+  let longTermSummariesEdit = JSON.parse(JSON.stringify(chat.memory.longTermSummaries || []));
   let archivePage = 1;
   let recallLogEdit = JSON.parse(JSON.stringify(chat.memory.recallLog || []));
+  const memoryEditorBase = JSON.parse(JSON.stringify({
+    state: chat.memory.state || emptyMemoryState(),
+    archive: chat.memory.archive || [],
+    longTermSummaries: chat.memory.longTermSummaries || [],
+    recallLog: chat.memory.recallLog || []
+  }));
   // 免费生图记忆（本地副本，保存时写回 chat.seedArchive；{角色名: {seed, anchor}} 形态）
   let seedArchiveEdit = Object.fromEntries(
     Object.entries(chat.seedArchive || {}).map(([k, v]) => [k, (v && typeof v === 'object')
@@ -124,12 +133,13 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             <input type="number" class="form-input" id="mem-raw-window" style="width: 64px;" min="0" max="50" value="${character.memoryEnabled !== false ? 1 : (Number.isFinite(Number(character.rawWindowTurns)) ? Math.max(0, Math.min(50, Math.trunc(Number(character.rawWindowTurns)))) : 3)}" ${character.memoryEnabled !== false ? 'disabled' : ''}>
             <span>轮对话</span>
           </label>
-          <span class="memory-sys-hint">开启时：最近1轮及未整理原文 + 当前状态 + 最近5索引 + 召回；关闭后按设定轮数携带原文</span>
+          <span class="memory-sys-hint">开启时：动态原文窗口 + 当前状态 + 当前短期组全部索引 + 最近10条长期记忆 + 远史召回；关闭后按设定轮数携带原文</span>
         </div>
         <div class="memory-tabs">
           <div class="memory-tabs-row">
             <button class="btn btn-primary btn-small memory-tab-btn" id="tab-short" data-tab="state">当前状态</button>
             <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-long" data-tab="archive">对话索引</button>
+            <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-longterm" data-tab="longTerm">长期记忆</button>
             <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-facts" data-tab="recalls">召回记录</button>
           </div>
           <div class="memory-tabs-row">
@@ -209,9 +219,11 @@ export async function openMemoryEditor(chat, character, onUpdate) {
     if (counterTimer) clearTimeout(counterTimer);
     const update = () => {
       counterTimer = null;
+      const memoryEdit = { archive: archiveEdit, longTermSummaries: longTermSummariesEdit };
       const residentText = [
         formatCurrentMemoryState({ state: stateEdit }),
-        formatRecentMemoryIndexes({ archive: archiveEdit }),
+        formatRecentMemoryIndexes(memoryEdit),
+        formatLongTermMemories(memoryEdit),
         supplementEdit.trim()
       ].filter(Boolean).join('\n\n');
       const indexText = JSON.stringify(archiveEdit.map((entry) => ({
@@ -222,17 +234,18 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       const residentTokens = countTokens(residentText);
       const indexTokens = countTokens(indexText);
       counterEl.textContent = `常驻约 ${residentTokens}｜索引库约 ${indexTokens} tokens`;
-      counterEl.title = '常驻=当前状态+最近5张索引+补充；不统计聊天详细原文、stateAfter状态快照或召回记录';
+      counterEl.title = '常驻=当前状态+连续索引+最近10条长期记忆+补充；不统计聊天详细原文、状态快照或召回记录';
     };
     if (immediate) update();
     else counterTimer = setTimeout(update, 300);
   }
 
   function renderContent() {
-    if (activeTab === 'state' || activeTab === 'archive' || activeTab === 'recalls') {
+    if (['state', 'archive', 'longTerm', 'recalls'].includes(activeTab)) {
       const primaryTabs = [
         ['tab-short', 'state', `状态（${stateEdit.characters.length}）`],
         ['tab-long', 'archive', `索引（${archiveEdit.length}）`],
+        ['tab-longterm', 'longTerm', `长期（${longTermSummariesEdit.length}）`],
         ['tab-facts', 'recalls', `召回（${recallLogEdit.length}）`]
       ];
       for (const [id, tab, label] of primaryTabs) {
@@ -244,6 +257,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         tab: activeTab,
         state: stateEdit,
         archive: archiveEdit,
+        longTerm: longTermSummariesEdit,
         archivePage,
         onArchivePage: (page) => { archivePage = page; },
         recallLog: recallLogEdit,
@@ -251,10 +265,11 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         chat,
         character,
         onChange: updateCounter,
-        onData: (state, archive, logs) => {
+        onData: (state, archive, logs, longTerm) => {
           stateEdit = JSON.parse(JSON.stringify(state));
           archiveEdit = JSON.parse(JSON.stringify(archive));
           recallLogEdit = JSON.parse(JSON.stringify(logs || []));
+          longTermSummariesEdit = JSON.parse(JSON.stringify(longTerm || []));
         },
         rerender: renderContent
       });
@@ -303,14 +318,16 @@ export async function openMemoryEditor(chat, character, onUpdate) {
     // 更新顶部页签的标题与激活态（短文案 + 数量，避免撑破窄屏）
     const shortTabBtn = document.getElementById('tab-short');
     const longTabBtn = document.getElementById('tab-long');
+    const longTermTabBtn = document.getElementById('tab-longterm');
     const factsTabBtn = document.getElementById('tab-facts');
     const seedsTabBtn = document.getElementById('tab-seeds');
     const anchorsTabBtn = document.getElementById('tab-anchors');
     const supplementTabBtn = document.getElementById('tab-supplement');
     const plotTabBtn = document.getElementById('tab-plot');
-    if (shortTabBtn && longTabBtn && factsTabBtn && seedsTabBtn && anchorsTabBtn && supplementTabBtn && plotTabBtn) {
+    if (shortTabBtn && longTabBtn && longTermTabBtn && factsTabBtn && seedsTabBtn && anchorsTabBtn && supplementTabBtn && plotTabBtn) {
       shortTabBtn.textContent = `状态（${stateEdit.characters.length}）`;
       longTabBtn.textContent = `索引（${archiveEdit.length}）`;
+      longTermTabBtn.textContent = `长期（${longTermSummariesEdit.length}）`;
       factsTabBtn.textContent = `召回（${recallLogEdit.length}）`;
       seedsTabBtn.textContent = `免费生图（${Object.keys(seedArchiveEdit).length}）`;
       anchorsTabBtn.textContent = `锚点（${Object.keys(appearanceAnchorsEdit).length}）`;
@@ -318,6 +335,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       plotTabBtn.textContent = `剧情（${plotEdit.stages.length}）`;
       shortTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'state' ? 'btn-primary' : 'btn-ghost');
       longTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'archive' ? 'btn-primary' : 'btn-ghost');
+      longTermTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'longTerm' ? 'btn-primary' : 'btn-ghost');
       factsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'recalls' ? 'btn-primary' : 'btn-ghost');
       seedsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'seeds' ? 'btn-primary' : 'btn-ghost');
       anchorsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'anchors' ? 'btn-primary' : 'btn-ghost');
@@ -1025,9 +1043,10 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   renderContent();
   updateCounter(true);
 
-  // 顶部页签切换：当前状态 / 对话索引 / 召回记录 / 辅助设定
+  // 顶部页签切换：当前状态 / 对话索引 / 长期记忆 / 召回记录 / 辅助设定
   document.getElementById('tab-short').addEventListener('click', () => { activeTab = 'state'; renderContent(); });
   document.getElementById('tab-long').addEventListener('click', () => { activeTab = 'archive'; renderContent(); });
+  document.getElementById('tab-longterm').addEventListener('click', () => { activeTab = 'longTerm'; renderContent(); });
   document.getElementById('tab-facts').addEventListener('click', () => { activeTab = 'recalls'; renderContent(); });
   document.getElementById('tab-seeds').addEventListener('click', () => { activeTab = 'seeds'; renderContent(); });
   document.getElementById('tab-anchors').addEventListener('click', () => { activeTab = 'anchors'; renderContent(); });
@@ -1088,14 +1107,25 @@ export async function openMemoryEditor(chat, character, onUpdate) {
 
       console.log('[memory editor] save shortTerm:', newShortTerm.length, 'longTerm:', newLongTerm.length);
 
-      // 新版原文召回记忆：保存当前状态、索引卡与召回记录；原文档案不按摘要过滤
+      // 混合记忆：保存状态、索引、一级长期摘要与召回记录；原文档案不按摘要过滤
       stateEdit.characters = stateEdit.characters.filter((c) => String(c.name || '').trim());
       stateEdit.promises = stateEdit.promises.filter((p) => String(p.text || '').trim());
       stateEdit.events = stateEdit.events.filter((e) => String(e.text || '').trim());
       stateEdit.intel = stateEdit.intel.filter((i) => String(i.text || '').trim());
+      const mergedMemory = mergeMemoryEditorSnapshots(memoryEditorBase, {
+        state: stateEdit,
+        archive: archiveEdit,
+        longTermSummaries: longTermSummariesEdit.filter((item) => item && String(item.content || '').trim()),
+        recallLog: recallLogEdit
+      }, chat.memory);
+      stateEdit = mergedMemory.state || emptyMemoryState();
+      archiveEdit = mergedMemory.archive;
+      longTermSummariesEdit = mergedMemory.longTermSummaries;
+      recallLogEdit = mergedMemory.recallLog;
       chat.memory.state = stateEdit;
       syncMemoryProfiles(chat.memory, true);
       chat.memory.archive = archiveEdit;
+      chat.memory.longTermSummaries = longTermSummariesEdit;
       chat.memory.recallLog = recallLogEdit;
       chat.memory.shortTerm = newShortTerm;
       chat.memory.longTerm = newLongTerm;

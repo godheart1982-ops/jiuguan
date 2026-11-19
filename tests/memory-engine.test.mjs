@@ -6,8 +6,9 @@ import {
   needsMemoryRawFallback, getMemoryRawWindowSize, markMessageMemoryEdited, truncateMemoryForResend, readArchivedTurn,
   finalizeRecallSelections, chunkRecallCards, runRecallPipeline, sceneTimeFromText,
   syncMemoryProfiles, makeMemoryStateSnapshot, restoreMemoryStateSnapshot,
-  memoryStateForRound, characterCardForMemoryRound, fillMissingIndexSceneTimes
+  memoryStateForRound, characterCardForMemoryRound, fillMissingIndexSceneTimes, queryNeedsHistoricalDetail
 } from '../src/services/memory-engine.js';
+import { resolveRawWindowSize } from '../src/services/api-messages.js';
 
 function makeRound(n, userText = `输入${n}`, aiText = `回复${n}`) {
   return {
@@ -102,17 +103,20 @@ test('多轮命中：较早轮次只给摘要，最近两轮保留详细原文',
   assert.ok(text.includes('用户：输入4'));
 });
 
-test('分级召回：low 丢弃、medium 只给摘要、最近两轮 high 展开原文', () => {
+test('分级召回：low 丢弃；默认全摘要，明确核验时最近两轮 high 展开原文', () => {
   const memory = {
     archive: [1, 2, 3, 4].map((n) => ({ ...archiveEntryForRound(makeRound(n)), index: { title: `标题${n}` } }))
   };
-  const recalls = finalizeRecallSelections(memory, [
+  const rows = [
     { turnId: 'turn-1', level: 'high' },
     { turnId: 'turn-2', level: 'medium' },
     { turnId: 'turn-3', level: 'low' },
     { turnId: 'turn-4', level: 'high' }
-  ], 'normal');
-  assert.equal(recalls.length, 3);
+  ];
+  const summaries = finalizeRecallSelections(memory, rows, 'normal');
+  assert.equal(summaries.length, 3);
+  assert.ok(summaries.every((recall) => recall.detail === false));
+  const recalls = finalizeRecallSelections(memory, rows, 'normal', { allowDetail: true });
   assert.equal(recalls.find((r) => r.turnId === 'turn-2').detail, false);
   assert.equal(recalls.find((r) => r.turnId === 'turn-1').detail, true);
   assert.equal(recalls.find((r) => r.turnId === 'turn-4').detail, true);
@@ -162,9 +166,10 @@ test('记忆结构初始化幂等，旧版重复原文自动剔除', () => {
   ensureMemoryEngine(memory);
   assert.equal('userText' in memory.archive[0], false);
   assert.equal('assistantText' in memory.archive[0], false);
-  assert.equal(memory.engine, 'archive-v1');
+  assert.equal(memory.engine, 'archive-v2');
+  assert.deepEqual(memory.longTermSummaries, []);
   ensureMemoryEngine(memory);
-  assert.equal(memory.engine, 'archive-v1');
+  assert.equal(memory.engine, 'archive-v2');
 });
 
 
@@ -257,7 +262,7 @@ test('大量索引保持分批粗筛与汇总复选，并传递改写意图', as
 });
 
 
-test('近期剧情脉络：先排原文窗口再取最近 5 张，召回去重后不补足', () => {
+test('连续剧情脉络：当前短期组全部携带，排除原文与召回重复项', () => {
   const memory = {
     archive: Array.from({ length: 7 }, (_, i) => ({
       turnId: `turn-${i + 1}`,
@@ -269,14 +274,14 @@ test('近期剧情脉络：先排原文窗口再取最近 5 张，召回去重�
     recalledTurns: [{ entry: { turnId: 'turn-4' } }],
     rawWindowTurnIds: ['turn-7']
   });
-  assert.ok(text.includes('近期剧情脉络'));
+  assert.ok(text.includes('连续剧情脉络'));
+  assert.ok(text.includes('第 1 轮｜标题1：摘要1'));
   assert.ok(text.includes('第 2 轮｜标题2：摘要2'));
   assert.ok(text.includes('第 3 轮｜标题3：摘要3'));
   assert.ok(text.includes('第 5 轮｜标题5：摘要5'));
   assert.ok(text.includes('第 6 轮｜标题6：摘要6'));
   assert.ok(!text.includes('第 4 轮'));
   assert.ok(!text.includes('第 7 轮'));
-  assert.ok(!text.includes('第 1 轮'));
   assert.ok(!text.includes('不应注入的关键词'));
   assert.ok(text.indexOf('第 2 轮') < text.indexOf('第 3 轮'));
   assert.ok(text.indexOf('第 3 轮') < text.indexOf('第 5 轮'));
@@ -399,4 +404,30 @@ test('单一明确旧事候选：无需第二次复选', async () => {
   assert.equal(calls, 1);
   assert.equal(result.reranked, false);
   assert.equal(result.rows[0].turnId, 'turn-1');
+});
+
+
+test('远史详细原文门槛：普通旧事只给摘要，原话与具体互动才核验原文', () => {
+  assert.equal(queryNeedsHistoricalDetail('还记得我们上次约会吗'), false);
+  assert.equal(queryNeedsHistoricalDetail('她当时的原话是什么'), true);
+  assert.equal(queryNeedsHistoricalDetail('具体怎么互动的'), true);
+});
+
+test('召回管线汇总 needsDetail，不因复选丢失原文核验意图', async () => {
+  const result = await runRecallPipeline(
+    [{ turnId: 'turn-1' }, { turnId: 'turn-2' }],
+    { userMessage: '继续' },
+    async (batch, query, phase) => phase === 'coarse'
+      ? { rows: [{ turnId: 'turn-1', level: 'high' }, { turnId: 'turn-2', level: 'medium' }], scope: 'specific', needsRerank: true, needsDetail: true }
+      : { rows: [{ turnId: 'turn-1', level: 'high' }], scope: 'specific', needsDetail: false }
+  );
+  assert.equal(result.needsDetail, true);
+});
+
+
+test('动态原文窗口不设50轮截断；关闭记忆时仍遵守卡级上限', () => {
+  assert.equal(resolveRawWindowSize({}, true, 73), 73);
+  assert.equal(resolveRawWindowSize({}, true, 1), 1);
+  assert.equal(resolveRawWindowSize({ rawWindowTurns: 73 }, false), 50);
+  assert.equal(resolveRawWindowSize({ rawWindowTurns: 0 }, false), 0);
 });

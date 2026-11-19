@@ -82,7 +82,8 @@ test('normalizeChatMemory: 缺失 memory / roundCounter 时按现有消息补齐
   assert.deepEqual(chat.memory.longTerm, []);
   assert.deepEqual(chat.memory.facts, { promises: [], relations: [], worldEvents: [], intel: [] });
   assert.deepEqual(chat.memory.archive, []);
-  assert.equal(chat.memory.engine, 'archive-v1');
+  assert.deepEqual(chat.memory.longTermSummaries, []);
+  assert.equal(chat.memory.engine, 'archive-v2');
   assert.ok(chat.memory.state && Array.isArray(chat.memory.state.characters));
   assert.equal(chat.roundCounter, 2);
 });

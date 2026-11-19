@@ -2,6 +2,7 @@
 // 新版原文记忆按永久 turnId 过滤，并恢复分支点最近的 stateAfter，而不是误用最新状态。
 
 import { emptyMemoryState, restoreMemoryStateSnapshot, turnIdOf } from './memory-engine.js';
+import { filterLongTermSummariesForTurns } from './memory-long-term.js';
 
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
@@ -28,6 +29,7 @@ export function buildBranchedChat(source, index, newId, nowIso) {
   if (clone.memory && Array.isArray(clone.memory.archive)) {
     const included = new Set(clone.messages.filter((m) => m.role === 'user').map((user) => turnIdOf({ user })));
     clone.memory.archive = clone.memory.archive.filter((entry) => included.has(entry.turnId));
+    filterLongTermSummariesForTurns(clone.memory, included);
     const snapshot = [...clone.memory.archive].reverse().find((entry) => entry && entry.stateAfter);
     clone.memory.state = snapshot ? restoreMemoryStateSnapshot(snapshot.stateAfter, clone.memory) : emptyMemoryState();
     clone.memory.recallLog = [];

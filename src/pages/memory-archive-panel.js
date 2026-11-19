@@ -1,4 +1,4 @@
-// 原文召回记忆的三个主面板：当前状态 / 对话索引 / 召回记录。
+// 混合记忆的四个主面板：当前状态 / 对话索引 / 长期记忆 / 召回记录。
 // 与插图、补充设定、剧情线等既有页签并存。
 
 import {
@@ -7,6 +7,10 @@ import {
 } from '../services/memory-engine.js';
 import { getAllRounds, getLeadingGreeting } from './chat/chat-memory-helpers.js';
 import { extractActionOptionSupplement } from '../services/action-options.js';
+import {
+  catchUpLongTermMemories, rebuildLongTermMemory, isLongTermSummaryCurrent,
+  LONG_TERM_GROUP_SIZE, LONG_TERM_RESIDENT_LIMIT
+} from '../services/memory-long-term.js';
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -37,7 +41,7 @@ export function getArchivePage(archive, requestedPage = 1, pageSize = ARCHIVE_PA
 }
 
 export function renderMemoryArchivePanel(options) {
-  const { tab, state, archive, recallLog, contentEl, chat, character, onChange, onData, rerender } = options;
+  const { tab, state, archive, longTerm = [], recallLog, contentEl, chat, character, onChange, onData, rerender } = options;
 
   function renderState() {
     const characters = state.characters.map((c, i) => `
@@ -108,7 +112,7 @@ export function renderMemoryArchivePanel(options) {
         chat.memory.state = state;
         chat.memory.archive = archive;
         await rebuildMemoryState(chat, character);
-        onData(chat.memory.state, chat.memory.archive, chat.memory.recallLog);
+        onData(chat.memory.state, chat.memory.archive, chat.memory.recallLog, chat.memory.longTermSummaries);
         rerender();
       } catch (err) { alert('状态重建失败：' + err.message); e.target.disabled = false; }
     });
@@ -191,9 +195,68 @@ export function renderMemoryArchivePanel(options) {
         chat.memory.state = state;
         chat.memory.archive = archive;
         await catchUpMemoryArchive(chat, character, getAllRounds(chat.messages).filter((r) => !r.user.meta), { greeting: getLeadingGreeting(chat.messages) });
-        onData(chat.memory.state, chat.memory.archive, chat.memory.recallLog);
+        onData(chat.memory.state, chat.memory.archive, chat.memory.recallLog, chat.memory.longTermSummaries);
         rerender();
       } catch (err) { alert('整理失败：' + err.message); e.target.disabled = false; }
+    });
+  }
+
+  function renderLongTerm() {
+    const cards = longTerm.map((item, index) => ({ item, index })).reverse().map(({ item, index: i }) => {
+      const current = isLongTermSummaryCurrent(item, { archive });
+      const sourceLines = (item.sourceTurnIds || []).map((id) => {
+        const entry = archive.find((a) => a.turnId === id);
+        return entry ? `第${entry.round ?? '—'}轮「${entry.index?.title || '未命名'}」 ${entry.index?.sceneTime || '时间未记录'}` : `${id}（来源已删除）`;
+      }).join('\n');
+      return `<div class="memory-card">
+        <div class="memory-card-header"><span class="memory-round-badge">第 ${item.sourceRounds?.[0] ?? '—'}～${item.sourceRounds?.at(-1) ?? '—'} 轮</span><button class="btn btn-ghost btn-small long-rebuild" data-i="${i}">重建</button><button class="btn btn-danger btn-small long-delete" data-i="${i}">删除</button></div>
+        <div style="font-size:12px;color:${current ? '#888' : '#d99'};margin:4px 0 6px;">${current ? '来源版本有效' : '已失效：来源被编辑、删除或索引待重建；本条暂停常驻'}</div>
+        <input class="form-input long-title" data-i="${i}" value="${escapeHtml(item.title || '')}" placeholder="长期记忆标题" style="margin-bottom:6px;">
+        <textarea class="form-textarea long-content" data-i="${i}" rows="5" placeholder="长期记忆正文">${escapeHtml(item.content || '')}</textarea>
+        <div style="font-size:12px;color:#999;margin-top:6px;">剧情时间：${escapeHtml([item.startSceneTime, item.endSceneTime].filter(Boolean).join(' 至 ') || '未记录')}</div>
+        <details style="margin-top:8px;"><summary style="cursor:pointer;color:#aaa;">查看来源（${item.sourceTurnIds?.length || 0}轮）</summary><pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:#bbb;margin-top:8px;">${escapeHtml(sourceLines)}</pre></details>
+      </div>`;
+    }).join('');
+    contentEl.innerHTML = `<div class="memory-section">
+      <div class="memory-section-title">长期记忆（${longTerm.length}）</div>
+      <div class="memory-section-hint" style="font-size:12px;color:#888;margin:2px 0 10px;">每 ${LONG_TERM_GROUP_SIZE} 张连续索引压缩为一条，只做一级压缩；最近 ${LONG_TERM_RESIDENT_LIMIT} 条常驻。原索引和原文始终保留。手动编辑内容不会触发重建，来源原文变化才会失效。</div>
+      <button class="btn btn-ghost btn-small" id="long-catchup" style="margin-bottom:10px;">整理全部长期记忆</button>
+      <div class="memory-list">${cards || '<div class="memory-empty">暂无长期记忆；攒满10张有效索引后后台自动生成</div>'}</div>
+    </div>`;
+    contentEl.querySelectorAll('.long-title').forEach((el) => el.addEventListener('change', () => {
+      longTerm[el.dataset.i].title = el.value.trim();
+      longTerm[el.dataset.i].updatedAt = new Date().toISOString();
+      onChange();
+    }));
+    contentEl.querySelectorAll('.long-content').forEach((el) => el.addEventListener('change', () => {
+      longTerm[el.dataset.i].content = el.value.trim();
+      longTerm[el.dataset.i].updatedAt = new Date().toISOString();
+      onChange();
+    }));
+    contentEl.querySelectorAll('.long-delete').forEach((el) => el.addEventListener('click', () => {
+      longTerm.splice(Number(el.dataset.i), 1);
+      onChange();
+      rerender();
+    }));
+    contentEl.querySelectorAll('.long-rebuild').forEach((el) => el.addEventListener('click', async () => {
+      el.disabled = true;
+      try {
+        chat.memory.archive = archive;
+        chat.memory.longTermSummaries = longTerm;
+        await rebuildLongTermMemory(chat, longTerm[Number(el.dataset.i)].id);
+        onData(state, archive, recallLog, chat.memory.longTermSummaries);
+        rerender();
+      } catch (err) { alert('长期记忆重建失败：' + err.message); el.disabled = false; }
+    }));
+    contentEl.querySelector('#long-catchup').addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try {
+        chat.memory.archive = archive;
+        chat.memory.longTermSummaries = longTerm;
+        await catchUpLongTermMemories(chat);
+        onData(state, archive, recallLog, chat.memory.longTermSummaries);
+        rerender();
+      } catch (err) { alert('长期记忆整理失败：' + err.message); e.target.disabled = false; }
     });
   }
 
@@ -236,5 +299,6 @@ export function renderMemoryArchivePanel(options) {
 
   if (tab === 'state') renderState();
   else if (tab === 'archive') renderArchive();
+  else if (tab === 'longTerm') renderLongTerm();
   else renderRecalls();
 }

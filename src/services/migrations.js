@@ -199,8 +199,10 @@ const CHAT_STEPS = [
         chat.memory.state = { scene: '', characters: [], promises: [], events: [], intel: [], asOfTurn: '', stale: false };
       }
       if (!Array.isArray(chat.memory.recallLog)) chat.memory.recallLog = [];
+      // 新长期记忆与旧版 memory.longTerm 完全分离，避免误读旧压缩格式
+      if (!Array.isArray(chat.memory.longTermSummaries)) chat.memory.longTermSummaries = [];
       if (!chat.memory.engineStartedAt) chat.memory.engineStartedAt = new Date().toISOString();
-      chat.memory.engine = 'archive-v1';
+      chat.memory.engine = 'archive-v2';
     }
   },
   {

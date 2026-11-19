@@ -1,13 +1,17 @@
-// 原文召回型记忆：当前状态账本 + 永久轮次原文 + 索引卡 + 发送前副 API 召回。
-// 不做短期→长期自动压缩；未提及的旧状态保持不变，刷新稿只有在退到历史区后才入库。
+// 混合记忆：当前状态 + 动态原文窗口 + 连续索引 + 固定十轮长期摘要 + 远史召回。
+// 未提及的旧状态保持不变，刷新稿只有在退到历史区后才入库；原索引和原文永不因压缩删除。
 
 import { getConfig, saveChat } from './storage.js';
 import { sendChat } from './api.js';
 import { resolveMemoryApi, trimAssistantForMemory, extractMemoryCorrections } from './api-memory.js';
 import { assembleCardDescription } from './card-modules.js';
+import {
+  ensureLongTermSummaries, catchUpLongTermMemories, markLongTermMemoryEdited,
+  filterLongTermSummariesForTurns, formatContinuousMemoryIndexes, getCoveredMemoryTurnIds
+} from './memory-long-term.js';
 
 export const RECENT_RAW_TURNS = 1;
-export const MEMORY_ENGINE_VERSION = 'archive-v1';
+export const MEMORY_ENGINE_VERSION = 'archive-v2';
 export const MEMORY_RECALL_LIMIT = 16;
 export const RECALL_BATCH_SIZE = 200;
 export const MEMORY_RECALL_DETAIL_LIMIT = 2;
@@ -95,6 +99,7 @@ export function ensureMemoryEngine(memory) {
   if (state.stale !== true) state.stale = false;
   if (!Array.isArray(memory.recallLog)) memory.recallLog = [];
   if (memory.recallLog.length > MEMORY_RECALL_LOG_LIMIT) memory.recallLog = memory.recallLog.slice(-MEMORY_RECALL_LOG_LIMIT);
+  ensureLongTermSummaries(memory);
   syncMemoryProfiles(memory);
   memory.engine = MEMORY_ENGINE_VERSION;
   return memory;
@@ -451,6 +456,7 @@ export async function catchUpMemoryArchive(chat, character, rounds, hooks = {}) 
     await saveChat(chat).catch(() => {});
   }
   if (processed) hooks.onStatus?.(`已整理 ${processed} 轮原文记忆`, 'success');
+  await catchUpLongTermMemories(chat, hooks);
   return processed;
 }
 
@@ -497,6 +503,7 @@ export function markMessageMemoryEdited(chat, message) {
   if (!entry) return false;
   entry.index = null;
   entry.stateAfter = null;
+  markLongTermMemoryEdited(chat.memory, turnId);
   if (chat.memory.state) chat.memory.state.stale = true;
   return true;
 }
@@ -509,6 +516,7 @@ export function truncateMemoryForResend(chat, userMessage) {
   const allowed = new Set(chat.messages.slice(0, Math.max(0, messageIndex))
     .filter((m) => m.role === 'user').map((user) => turnIdOf({ user })));
   chat.memory.archive = chat.memory.archive.filter((entry) => allowed.has(entry.turnId));
+  filterLongTermSummariesForTurns(chat.memory, allowed);
   const snapshot = [...chat.memory.archive].reverse().find((entry) => entry && entry.stateAfter);
   chat.memory.state = snapshot ? restoreMemoryStateSnapshot(snapshot.stateAfter, chat.memory) : emptyMemoryState();
   chat.memory.recallLog = [];
@@ -528,11 +536,11 @@ function recallScopeRank(scope) {
   return ({ none: 0, normal: 1, specific: 2, review: 3 })[scope] ?? 1;
 }
 
-/** 清洗分级结果：low 丢弃；普通轮少量，长线回顾最多 16 条；只有 high 可展开原文。 */
-export function finalizeRecallSelections(memory, rows, scope = 'normal') {
+/** 远史默认只给摘要；只有明确核对原话/细节或摘要冲突时，最近两轮 high 才展开原文。 */
+export function finalizeRecallSelections(memory, rows, scope = 'normal', options = {}) {
   const safeScope = ['none', 'normal', 'specific', 'review'].includes(scope) ? scope : 'normal';
   if (safeScope === 'none') return [];
-  const limit = safeScope === 'review' ? MEMORY_RECALL_LIMIT : (safeScope === 'specific' ? 6 : 4);
+  const limit = safeScope === 'review' ? MEMORY_RECALL_LIMIT : (safeScope === 'specific' ? 8 : 6);
   const seen = new Set();
   const valid = [];
   const ordered = (Array.isArray(rows) ? rows : []).slice().sort((a, b) => {
@@ -560,17 +568,22 @@ export function finalizeRecallSelections(memory, rows, scope = 'normal') {
   const high = valid.filter((r) => r.level === 'high');
   const newest = high.slice().sort((a, b) => memory.archive.indexOf(a.entry) - memory.archive.indexOf(b.entry))
     .slice(-MEMORY_RECALL_DETAIL_LIMIT);
-  const detailIds = new Set(newest.map((r) => r.turnId));
+  const detailIds = options.allowDetail === true ? new Set(newest.map((r) => r.turnId)) : new Set();
   valid.forEach((recall) => { recall.detail = detailIds.has(recall.turnId); });
   return valid;
+}
+
+export function queryNeedsHistoricalDetail(text) {
+  const value = String(text || '');
+  return /原话|逐字|原文|详细|细节|具体(?:怎么|如何|过程|互动|说了|说了什么)|当时(?:说|回答|回应|怎么互动)|说了什么|怎么说的/.test(value);
 }
 
 async function requestRecallBatch(api, cards, query, phase = 'coarse') {
   const finalPhase = phase === 'final';
   const prompt = `请从索引卡中找出本轮真正需要的历史记忆。允许一个也不选，禁止为凑数而选。
 
-只输出 JSON：{"rewrittenQuery":"结合上下文后的明确检索意图","needsRerank":false,"scope":"none/normal/specific/review","recall":[{"turnId":"原id","level":"high/medium/low","reason":"一句理由","includeContext":false}]}
-turnId 必须照抄。scope 含义：none=当前状态足够或无历史需要；normal=普通续写；specific=针对某件旧事；review=明确要求回顾一段长期关系/事件线。
+只输出 JSON：{"rewrittenQuery":"结合上下文后的明确检索意图","needsRerank":false,"needsDetail":false,"scope":"none/normal/specific/review","recall":[{"turnId":"原id","level":"high/medium/low","reason":"一句理由","includeContext":false}]}
+turnId 必须照抄。scope 含义：none=当前状态足够或无历史需要；normal=普通续写；specific=针对某件旧事；review=明确要求回顾一段长期关系/事件线。远史默认只返回索引摘要；只有用户明确问原话、具体互动细节，或不同摘要存在必须核验的冲突时才设 needsDetail=true。
 
 选择纪律：
 1. high=能直接回答当前问题、解释当前冲突或提供不可缺少的前因；medium=人物与主题相关，可作背景摘要；low=只有人名/地点/关系/物品/情绪等宽泛重合。low 会在本地直接丢弃。
@@ -611,7 +624,8 @@ ${JSON.stringify(cards)}`;
   const scope = parsed && !Array.isArray(parsed) && ['none', 'normal', 'specific', 'review'].includes(parsed.scope) ? parsed.scope : 'normal';
   const rewrittenQuery = parsed && !Array.isArray(parsed) ? String(parsed.rewrittenQuery || '').trim().slice(0, 240) : '';
   const needsRerank = Boolean(parsed && !Array.isArray(parsed) && parsed.needsRerank === true);
-  return { rows: Array.isArray(rows) ? rows : [], scope, rewrittenQuery, needsRerank };
+  const needsDetail = Boolean(parsed && !Array.isArray(parsed) && parsed.needsDetail === true);
+  return { rows: Array.isArray(rows) ? rows : [], scope, rewrittenQuery, needsRerank, needsDetail };
 }
 
 function recallCandidateCards(cards, rows) {
@@ -631,11 +645,13 @@ export async function runRecallPipeline(cards, query, request) {
   let rows = [];
   let rewrittenQuery = '';
   let reranked = false;
+  let needsDetail = queryNeedsHistoricalDetail(query.userMessage);
   if (batches.length === 1) {
     const result = await request(batches[0], query, 'coarse');
     rows = result.rows;
     scope = result.scope;
     rewrittenQuery = result.rewrittenQuery || '';
+    needsDetail = needsDetail || result.needsDetail === true;
     const candidateCards = recallCandidateCards(cards, rows);
     const needsRerank = result.needsRerank || (candidateCards.length > 1 && (scope === 'specific' || scope === 'review'));
     if (candidateCards.length && needsRerank) {
@@ -643,6 +659,7 @@ export async function runRecallPipeline(cards, query, request) {
       rows = rowsFromCandidates(merged.rows, candidateCards);
       scope = merged.scope;
       rewrittenQuery = merged.rewrittenQuery || rewrittenQuery;
+      needsDetail = needsDetail || merged.needsDetail === true;
       reranked = true;
     }
   } else {
@@ -653,22 +670,27 @@ export async function runRecallPipeline(cards, query, request) {
     rows = successful.flatMap((r) => r.rows);
     scope = primary.scope || 'normal';
     rewrittenQuery = primary.rewrittenQuery || successful.find((r) => r.rewrittenQuery)?.rewrittenQuery || '';
+    needsDetail = needsDetail || successful.some((r) => r.needsDetail === true);
     const candidateCards = recallCandidateCards(cards, rows);
     if (candidateCards.length) {
       const merged = await request(candidateCards, { ...query, recallScope: scope, rewrittenQuery }, 'final');
       rows = rowsFromCandidates(merged.rows, candidateCards);
       scope = merged.scope;
       rewrittenQuery = merged.rewrittenQuery || rewrittenQuery;
+      needsDetail = needsDetail || merged.needsDetail === true;
       reranked = true;
     }
   }
-  return { rows, scope, rewrittenQuery, reranked };
+  return { rows, scope, rewrittenQuery, reranked, needsDetail };
 }
 
 /** 主回复前：查询改写与粗筛一次完成；仅复杂回忆复选，超过 200 张卡仍分批并行。 */
 export async function selectMemoryRecalls(memory, query = {}) {
   ensureMemoryEngine(memory);
+  const detailRequested = queryNeedsHistoricalDetail(query.userMessage);
   const excluded = new Set(query.excludeTurnIds || []);
+  // 泛泛续写不重复召回常驻覆盖区；明确核对细节时仍可从长期覆盖区精确翻原文。
+  if (!detailRequested) for (const id of getCoveredMemoryTurnIds(memory)) excluded.add(id);
   const candidates = selectorCards(memory, excluded);
   if (!candidates.length) return { selections: [], recalls: [] };
   const config = await getConfig();
@@ -676,7 +698,7 @@ export async function selectMemoryRecalls(memory, query = {}) {
   const cards = candidates.map((entry) => ({ turnId: entry.turnId, round: entry.round, ...entry.index }));
   const result = await runRecallPipeline(cards, query,
     (batch, batchQuery, phase) => requestRecallBatch(api, batch, batchQuery, phase));
-  const recalls = finalizeRecallSelections(memory, result.rows, result.scope);
+  const recalls = finalizeRecallSelections(memory, result.rows, result.scope, { allowDetail: result.needsDetail });
   const selections = recalls.map((recall) => ({
     turnId: recall.turnId,
     level: recall.level,
@@ -698,30 +720,9 @@ export async function selectMemoryRecalls(memory, query = {}) {
   return { selections, recalls };
 }
 
-export const RECENT_MEMORY_INDEX_LIMIT = 5;
-
-/** 先排除原文窗口再取最近 5 张；召回去重后不向更早补足。 */
+/** 兼容原调用名：现在注入当前短期组全部索引，而不是固定最近 5 张。 */
 export function formatRecentMemoryIndexes(memory, options = {}) {
-  const archive = memory && Array.isArray(memory.archive) ? memory.archive : [];
-  const recalled = Array.isArray(options.recalledTurns) ? options.recalledTurns : [];
-  const rawWindow = Array.isArray(options.rawWindowTurnIds) ? options.rawWindowTurnIds : [];
-  const rawExcluded = new Set(rawWindow.map(String));
-  const recallExcluded = new Set();
-  for (const recall of recalled) {
-    const id = recall && (recall.turnId || recall.entry?.turnId);
-    if (id) recallExcluded.add(String(id));
-  }
-  const entries = archive.filter((entry) => entry && entry.index && !rawExcluded.has(String(entry.turnId)))
-    .slice(-RECENT_MEMORY_INDEX_LIMIT)
-    .filter((entry) => !recallExcluded.has(String(entry.turnId)));
-  if (!entries.length) return '';
-  const lines = entries.map((entry) => {
-    const title = String(entry.index.title || '相关对话').trim();
-    const summary = String(entry.index.summary || '').trim();
-    const sceneTime = String(entry.index.sceneTime || '时间未记录').trim();
-    return `第 ${entry.round ?? '—'} 轮｜${title}：${summary}｜时间：${sceneTime}`;
-  });
-  return '【近期剧情脉络】（最近 5 轮索引摘要，仅用于了解前情；场景、衣着、情绪与数值以当前状态和最新原文为准）\n' + lines.join('\n');
+  return formatContinuousMemoryIndexes(memory, options);
 }
 
 export function formatRecalledTurns(recalls, messages = []) {

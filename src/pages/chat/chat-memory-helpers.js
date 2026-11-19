@@ -1,6 +1,7 @@
 // 记忆相关纯函数 / 压缩（不依赖 DOM）
 
 import { saveChat } from '../../services/storage.js';
+import { isActiveSwipeAborted } from './chat-swipes.js';
 import {
   summarizeShortTermMemories,
   SHORT_TERM_LIMIT,
@@ -16,7 +17,7 @@ export function isIncompleteAssistant(content) {
   return false;
 }
 
-/** 取全部完整的 user+assistant 轮次（开场白和失败回复不计入），按时间顺序排列 */
+/** 取全部完整的 user+assistant 轮次（开场白、失败及中止稿不计入），按时间顺序排列 */
 export function getAllRounds(messages) {
   const rounds = [];
   for (let i = 0; i < messages.length; i++) {
@@ -31,7 +32,7 @@ export function getAllRounds(messages) {
       }
     }
     if (!assistant) continue;
-    if (isIncompleteAssistant(assistant.content)) continue;
+    if (isIncompleteAssistant(assistant.content) || isActiveSwipeAborted(assistant)) continue;
     rounds.push({ user: msg, assistant });
   }
   return rounds;

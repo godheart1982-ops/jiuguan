@@ -12,6 +12,7 @@ import { resolveWorldBookInjection } from './world-book.js';
 import { assembleCardDescription, buildOffscreenRosterBlock } from './card-modules.js';
 import { resolveCardPrompt } from './prompt-library.js';
 import { formatCurrentMemoryState, formatRecentMemoryIndexes, formatRecalledTurns, RECENT_RAW_TURNS } from './memory-engine.js';
+import { formatLongTermMemories } from './memory-long-term.js';
 
 // 思维链预填充文本：开启后追加为 messages 最后一条 assistant 消息，强制模型从此处续写
 export const THINKING_PREFILL = '<思考>';
@@ -177,7 +178,7 @@ export async function buildMessages(character, historyMessages, userMessage, mem
 
   const memoryOn = character.memoryEnabled !== false;
 
-  // 新版记忆：当前状态与近期索引常驻；发送前由副 API 选出的历史原文仅本轮注入
+  // 当前状态与连续索引常驻；最近10条长期摘要提供中期背景，远史按需召回。
   const currentStateBlock = memoryOn ? formatCurrentMemoryState(memory) : '';
   if (currentStateBlock) systemContent += '\n\n' + currentStateBlock;
   const recentIndexBlock = memoryOn ? formatRecentMemoryIndexes(memory, {
@@ -185,6 +186,8 @@ export async function buildMessages(character, historyMessages, userMessage, mem
     rawWindowTurnIds: options && options.rawWindowTurnIds
   }) : '';
   if (recentIndexBlock) systemContent += '\n\n' + recentIndexBlock;
+  const longTermBlock = memoryOn ? formatLongTermMemories(memory) : '';
+  if (longTermBlock) systemContent += '\n\n' + longTermBlock;
   const recalledBlock = memoryOn ? formatRecalledTurns(options && options.recalledTurns, historyMessages) : '';
   if (recalledBlock) systemContent += '\n\n' + recalledBlock;
 
@@ -229,15 +232,9 @@ export async function buildMessages(character, historyMessages, userMessage, mem
     content: systemContent
   });
 
-  // 历史消息窗口：记忆开启时固定 3 轮（更早的交给短期/长期记忆）；记忆关闭时按本卡设定的轮数携带原文
-  const rawWindow = (() => {
-    if (memoryOn) {
-      const override = Number(options && options.rawWindowOverride);
-      return Number.isFinite(override) ? Math.max(1, Math.min(50, Math.trunc(override))) : RECENT_RAW_TURNS;
-    }
-    const n = Number(character.rawWindowTurns);
-    return Number.isFinite(n) ? Math.max(0, Math.min(50, Math.trunc(n))) : 3;
-  })();
+  // 记忆开启时通常最近1轮；后台滞后多久就完整携带多久，不能截断后又从连续索引排除。
+  // 记忆关闭时才使用卡级 0～50 轮限制。
+  const rawWindow = resolveRawWindowSize(character, memoryOn, options && options.rawWindowOverride);
   // 旧轮菜单剥离，最近一轮完整保留作格式示范与数字映射；不修改本地聊天
   const recentHistory = trimHistoricalActionOptions(sliceRecentTurns(historyMessages, rawWindow));
   const latestAssistant = [...recentHistory].reverse().find((msg) => msg.role === 'assistant');
@@ -287,6 +284,15 @@ export async function buildMessages(character, historyMessages, userMessage, mem
 /**
  * 历史消息插图标记清洗：已移至 illustration-markers.js（与记忆总结路径共用同一实现）
  */
+
+export function resolveRawWindowSize(character, memoryOn, override) {
+  if (memoryOn) {
+    const value = Number(override);
+    return Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : RECENT_RAW_TURNS;
+  }
+  const value = Number(character && character.rawWindowTurns);
+  return Number.isFinite(value) ? Math.max(0, Math.min(50, Math.trunc(value))) : 3;
+}
 
 function sliceRecentTurns(history, maxTurns) {
   if (!Array.isArray(history)) return [];
