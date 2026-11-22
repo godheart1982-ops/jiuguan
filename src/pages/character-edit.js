@@ -118,14 +118,17 @@ export async function renderCharacterEdit(container, characterId) {
     </div>
 
     <div class="form-group">
-      <label class="form-label">背景设定（卡内模块）</label>
+      <div class="form-label-with-action">
+        <label class="form-label">背景设定（卡内模块）</label>
+        <button class="btn btn-ghost btn-small" id="btn-edit-background" type="button">⛶ 展开编辑</button>
+      </div>
       <textarea class="form-textarea" id="input-background" placeholder="世界观、社会规则、故事舞台等背景信息；不写具体角色人设。">${escapeHtml(character.background || '')}</textarea>
       <div class="form-hint">选填。注入时位于所有角色模块之前；世界观集中写这里，避免和角色设定重复。</div>
     </div>
 
     <div class="form-section">
-      <div class="form-section-title">角色模块 *</div>
-      <div class="form-hint" style="margin-bottom: 8px;">每个角色一块设定，姓名直接写在设定文本里；<b>主角放第一块</b>，剧情里出现的重要新角色随时添加，下一轮请求即带上完整人格。全部模块每轮常驻注入（顺序：背景设定 → 各角色模块）。主角写法见《角色卡模板.txt》，配角精简写法见《配角卡模板.txt》。老卡的角色描述已自动并入第一块。</div>
+      <div class="form-section-title">角色模块</div>
+      <div class="form-hint" style="margin-bottom: 8px;">选填；模拟器母卡、纯世界卡等不需要预制角色的卡可整体留空。每个角色一块设定，姓名直接写在设定文本里；<b>主角放第一块</b>，剧情里出现的重要新角色随时添加，下一轮请求即带上完整人格。全部模块每轮常驻注入（顺序：背景设定 → 各角色模块）。主角写法见《角色卡模板.txt》，配角精简写法见《配角卡模板.txt》。老卡的角色描述已自动并入第一块。</div>
       <div id="role-module-list"></div>
       <button class="btn btn-ghost btn-small" id="btn-role-module-add" type="button">＋ 添加角色</button>
     </div>
@@ -538,6 +541,19 @@ export async function renderCharacterEdit(container, characterId) {
     });
   });
 
+  document.getElementById('btn-edit-background').addEventListener('click', () => {
+    const textarea = document.getElementById('input-background');
+    openBigTextEditor({
+      title: '背景设定（卡内模块）',
+      value: textarea.value,
+      placeholder: textarea.placeholder,
+      onSave: (newValue) => {
+        textarea.value = newValue;
+        textarea.dispatchEvent(new Event('input'));
+      }
+    });
+  });
+
   document.getElementById('btn-edit-main-control').addEventListener('click', () => {
     const textarea = document.getElementById('input-main-control-description');
     openBigTextEditor({
@@ -744,11 +760,6 @@ export async function renderCharacterEdit(container, characterId) {
         alert('请输入角色名称');
         return;
       }
-      if (!modulesClean.length) {
-        alert('请至少填写一个角色模块（主角）');
-        return;
-      }
-
       character.name = name;
       character.group = document.getElementById('input-group').value.trim();
       character.greeting = document.getElementById('input-greeting').value.trim();
