@@ -19,6 +19,7 @@ function escapeHtml(text) {
 }
 
 const CHARACTER_FIELDS = [
+  ['core', '一句话核心（20字内，身份+主要矛盾或目标+当前状态）'],
   ['presence', '在场状态'], ['offscreen', '最近场外状态'],
   ['appearance', '外貌身材'], ['kinks', '特殊性癖（体位/力度偏好不算）'],
   ['outerAura', '外在气质'], ['innerAura', '实际内在气质'],
@@ -71,7 +72,7 @@ export function renderMemoryArchivePanel(options) {
     contentEl.innerHTML = `
       <div class="memory-section">
         <div class="memory-section-title">当前状态账本</div>
-        <div class="memory-section-hint" style="font-size:12px;color:#888;margin:2px 0 10px;">记录当前有效状态；角色卡提供初始设定，重要人物首次入库会补全外貌、成年性癖与内外气质，后续只按明确事件更新。未提到的旧状态不会变。${state.stale ? '<strong style="color:#d99;">旧轮次被编辑过，建议重建状态。</strong>' : ''}</div>
+        <div class="memory-section-hint" style="font-size:12px;color:#888;margin:2px 0 10px;">记录当前有效状态；角色卡提供初始一句话核心与设定，重要人物首次入库会补全核心、外貌、成年性癖与内外气质。核心只在身份、主要矛盾或长期处境变化时更新，其余字段也只按明确事件更新。未提到的旧状态不会变。${state.stale ? '<strong style="color:#d99;">旧轮次被编辑过，建议重建状态。</strong>' : ''}</div>
         <label class="form-label">当前场景</label>
         <textarea class="form-textarea" id="state-scene" rows="2" placeholder="日期时间、地点、在场人物">${escapeHtml(state.scene)}</textarea>
         <div class="memory-section-title" style="margin-top:16px;">人物当前状态（${state.characters.length}）</div>

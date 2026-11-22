@@ -44,12 +44,13 @@ test('原文档案：索引不复制原文，引用消息时清理并附开场�
 
 test('状态补丁：未提旧项不变，人物按名局部更新，删除必须显式', () => {
   const state = emptyMemoryState();
-  state.characters.push({ name: '夏逐波', relation: '炮友', agreement: '无排他承诺', mood: '平静' });
+  state.characters.push({ name: '夏逐波', core: '自由撰稿人，重视边界', relation: '炮友', agreement: '无排他承诺', mood: '平静' });
   state.promises.push({ id: 'p1', text: '周五复诊', status: 'open' });
   const next = applyMemoryStatePatch(state, {
     characters: [{ name: '夏逐波', relation: '', mood: '紧张', evidence: '她抓紧了书' }],
     promises: [{ id: 'p2', text: '周日看电影', status: 'open' }]
   }, 'turn-2');
+  assert.equal(next.characters[0].core, '自由撰稿人，重视边界');
   assert.equal(next.characters[0].relation, '炮友');
   assert.equal(next.characters[0].agreement, '无排他承诺');
   assert.equal(next.characters[0].mood, '紧张');
@@ -64,11 +65,12 @@ test('状态补丁：未提旧项不变，人物按名局部更新，删除必�
 test('状态账本格式化：保留关系约定、约定、事件与知情范围', () => {
   const state = emptyMemoryState();
   state.scene = '11月21日 22:45 观音桥家';
-  state.characters.push({ name: '夏逐波', relation: '炮友', agreement: '无排他承诺', scores: '好感50' });
+  state.characters.push({ name: '夏逐波', core: '独立插画师，想自由却怕失去稳定收入', relation: '炮友', agreement: '无排他承诺', scores: '好感50' });
   state.promises.push({ text: '周五复诊', status: 'open', due: '周五' });
   state.events.push({ text: '裁员评审', stage: '发酵' });
   state.intel.push({ text: '主控已婚', knownBy: ['夏逐波'] });
   const text = formatMemoryState(state);
+  assert.ok(text.includes('一句话核心=独立插画师，想自由却怕失去稳定收入'));
   assert.ok(text.includes('无排他承诺'));
   assert.ok(text.includes('周五复诊'));
   assert.ok(text.includes('裁员评审→发酵'));
@@ -346,7 +348,7 @@ test('固定人物档案：快照省略固定字段并可从 profiles 完整恢�
     state: {
       ...emptyMemoryState(),
       characters: [{
-        name: '林静', appearance: '神似新垣结衣；168cm', kinks: '被夸奖',
+        name: '林静', core: '咖啡店长，想守住小店', appearance: '神似新垣结衣；168cm', kinks: '被夸奖',
         outerAura: '端庄', innerAura: '敏感', mood: '低落'
       }]
     }
@@ -356,6 +358,8 @@ test('固定人物档案：快照省略固定字段并可从 profiles 完整恢�
   assert.equal(snapshot.characters[0].kinks, undefined);
   assert.equal(snapshot.characters[0].outerAura, undefined);
   assert.equal(snapshot.characters[0].appearance, '神似新垣结衣；168cm');
+  assert.equal(snapshot.characters[0].core, '咖啡店长，想守住小店');
+  assert.equal(memory.profiles.林静.core, undefined);
   assert.equal(snapshot.characters[0].mood, '低落');
   const restored = restoreMemoryStateSnapshot(snapshot, memory);
   assert.equal(restored.characters[0].kinks, '被夸奖');
@@ -365,7 +369,7 @@ test('固定人物档案：快照省略固定字段并可从 profiles 完整恢�
 
 test('后台总结输入：只保留本轮相关人物，档案完整时不重复附角色卡', () => {
   const complete = {
-    name: '林静', appearance: '168cm', kinks: '被夸奖', outerAura: '端庄', innerAura: '敏感'
+    name: '林静', core: '咖啡店长，想守住小店', appearance: '168cm', kinks: '被夸奖', outerAura: '端庄', innerAura: '敏感'
   };
   const other = { ...complete, name: '苏晴' };
   const state = { ...emptyMemoryState(), characters: [complete, other] };
@@ -376,6 +380,8 @@ test('后台总结输入：只保留本轮相关人物，档案完整时不重�
   assert.equal(characterCardForMemoryRound(character, state, round), '');
   const missing = { ...state, characters: [{ ...complete, appearance: '' }] };
   assert.ok(characterCardForMemoryRound(character, missing, round).includes('林静的角色设定'));
+  const missingCore = { ...state, characters: [{ ...complete, core: '' }] };
+  assert.ok(characterCardForMemoryRound(character, missingCore, round).includes('林静的角色设定'));
 });
 
 test('旧索引时间：从对应原文本地补齐，不改已有时间', () => {
