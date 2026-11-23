@@ -89,7 +89,7 @@ export function getContinuousIndexEntries(memory) {
   return [...uncovered, ...current].filter((entry) => entry.turnId && entry.index);
 }
 
-/** 泛泛回顾时不重复召回已常驻内容；明确核对原文时由调用方绕过此覆盖排除。 */
+/** 常驻覆盖ID用于召回后的普通续写去重；specific/review 与原文核验不据此排除。 */
 export function getCoveredMemoryTurnIds(memory) {
   const covered = new Set(getContinuousIndexEntries(memory).map((entry) => String(entry.turnId)));
   for (const summary of getResidentLongTermSummaries(memory)) {

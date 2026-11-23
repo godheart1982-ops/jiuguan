@@ -6,7 +6,8 @@ import {
   needsMemoryRawFallback, getMemoryRawWindowSize, markMessageMemoryEdited, truncateMemoryForResend, readArchivedTurn,
   finalizeRecallSelections, chunkRecallCards, runRecallPipeline, sceneTimeFromText,
   syncMemoryProfiles, makeMemoryStateSnapshot, restoreMemoryStateSnapshot,
-  memoryStateForRound, characterCardForMemoryRound, fillMissingIndexSceneTimes, queryNeedsHistoricalDetail
+  memoryStateForRound, characterCardForMemoryRound, fillMissingIndexSceneTimes, queryNeedsHistoricalDetail,
+  filterCoveredRecallRows
 } from '../src/services/memory-engine.js';
 import { resolveRawWindowSize } from '../src/services/api-messages.js';
 
@@ -436,4 +437,30 @@ test('动态原文窗口不设50轮截断；关闭记忆时仍遵守卡级上限
   assert.equal(resolveRawWindowSize({}, true, 1), 1);
   assert.equal(resolveRawWindowSize({ rawWindowTurns: 73 }, false), 50);
   assert.equal(resolveRawWindowSize({ rawWindowTurns: 0 }, false), 0);
+});
+
+
+test('常驻覆盖区后置去重：普通续写排除，明确旧事和长线回顾仍允许召回', () => {
+  const rows = [
+    { turnId: 'turn-1', level: 'high' },
+    { turnId: 'turn-49', level: 'high' },
+    { turnId: 'turn-120', level: 'medium' }
+  ];
+  const covered = new Set(['turn-1', 'turn-49']);
+  assert.deepEqual(
+    filterCoveredRecallRows(rows, 'normal', covered).map((row) => row.turnId),
+    ['turn-120']
+  );
+  assert.deepEqual(
+    filterCoveredRecallRows(rows, 'specific', covered).map((row) => row.turnId),
+    ['turn-1', 'turn-49', 'turn-120']
+  );
+  assert.deepEqual(
+    filterCoveredRecallRows(rows, 'review', covered).map((row) => row.turnId),
+    ['turn-1', 'turn-49', 'turn-120']
+  );
+  assert.deepEqual(
+    filterCoveredRecallRows(rows, 'normal', covered, true).map((row) => row.turnId),
+    ['turn-1', 'turn-49', 'turn-120']
+  );
 });
