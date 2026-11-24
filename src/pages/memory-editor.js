@@ -2,15 +2,6 @@
 // 自包含模块——自己建遮罩、绑事件、保存，输入仅 (chat, character, onUpdate)，与聊天页状态零耦合。
 // migrateMemory 也住在这里：它既被编辑器调用，也被聊天页打开旧对话时做结构迁移。
 import { saveCharacter, saveChat, saveAnchorRefImage, deleteAnchorRefImage, getGeneratedImageDataUrl } from '../services/storage.js';
-import {
-  summarizeShortTermMemories,
-  condenseLongTermMemory,
-  RAW_WINDOW_TURNS,
-  SHORT_TERM_LIMIT,
-  LONG_TERM_REFERENCE_COUNT,
-  normalizeFacts,
-  formatFactsMemo
-} from '../services/api-memory.js';
 import { anchorTextOf, anchorImgOf } from '../services/image-gen.js';
 import { migrateChat } from '../services/migrations.js';
 import { countTokens } from '../utils/tokenizer.js';
@@ -57,12 +48,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   // 确保 memory 具备原文档案、状态账本和召回记录结构
   migrateMemory(chat);
 
-  // 使用本地可变副本，避免依赖 DOM 收集时出现的浏览器/时序问题
-  let shortTermMemories = [...(chat.memory.shortTerm || [])];
-  let longTermMemories = [...(chat.memory.longTerm || [])];
-  // 事实备忘（本地副本）；mcName：主控真名，关系端点归一化用（「主控」→真名）
-  const mcName = (character && character.mainControl && character.mainControl.name) || '';
-  let factsEdit = normalizeFacts(chat.memory.facts, mcName);
   // 混合记忆本地副本：状态账本 / 轮次索引 / 一级长期摘要 / 召回记录
   let stateEdit = JSON.parse(JSON.stringify(chat.memory.state || emptyMemoryState()));
   let archiveEdit = JSON.parse(JSON.stringify(chat.memory.archive || []));
@@ -172,21 +157,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   });
   syncMemoryControls();
 
-  function formatRoundRange(rounds) {
-    if (rounds === undefined) return '—';
-    if (!Array.isArray(rounds) || rounds.length === 0) return '已精简';
-    const sorted = [...new Set(rounds)].sort((a, b) => a - b);
-    const ranges = [];
-    let start = sorted[0];
-    let prev = sorted[0];
-    for (let i = 1; i <= sorted.length; i++) {
-      if (i < sorted.length && sorted[i] === prev + 1) { prev = sorted[i]; continue; }
-      ranges.push(start === prev ? `${start}` : `${start}~${prev}`);
-      if (i < sorted.length) { start = sorted[i]; prev = sorted[i]; }
-    }
-    return '第 ' + ranges.join(', ') + ' 轮';
-  }
-
   let counterTimer = null;
   function updateCounter(immediate = false) {
     if (counterTimer) clearTimeout(counterTimer);
@@ -249,45 +219,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       updateCounter();
       return;
     }
-    const shortTerm = shortTermMemories;
-    const longTerm = longTermMemories;
-
-    const shortTermHtml = shortTerm.length === 0
-      ? '<div class="memory-empty">暂无短期记忆</div>'
-      : shortTerm.map((item, index) => `
-          <div class="memory-card memory-card-short" data-index="${index}">
-            <div class="memory-card-header">
-              <span class="memory-round-badge">${Number.isFinite(item.round) ? '第 ' + item.round + ' 轮' : '—'}</span>
-              <input type="date" class="form-input memory-date-input" value="${escapeHtml(item.date || '')}">
-              <button class="btn btn-danger btn-small btn-delete-short" data-index="${index}">删除</button>
-            </div>
-            <textarea class="form-textarea memory-content" placeholder="短期记忆摘要" rows="2">${escapeHtml(item.content || '')}</textarea>
-          </div>
-        `).join('');
-
-    const longTermHtml = longTerm.length === 0
-      ? '<div class="memory-empty">暂无长期记忆</div>'
-      : longTerm.map((item, index) => `
-          <div class="memory-card memory-card-long" data-index="${index}">
-            <div class="memory-card-header memory-card-header-long">
-              <div class="memory-card-row-top">
-                <span class="memory-round-badge">${formatRoundRange(item.sourceRounds)}</span>
-                <button class="btn ${item.pinned ? 'btn-primary' : 'btn-ghost'} btn-small btn-pin-long" data-index="${index}" title="加星常驻：全文注入，永不降级为目录">★</button>
-                <button class="btn btn-danger btn-small btn-delete-long" data-index="${index}">删除</button>
-              </div>
-              <div class="memory-date-range">
-                <input type="date" class="form-input memory-date-input" value="${escapeHtml(item.startDate || '')}">
-                <span>至</span>
-                <input type="date" class="form-input memory-date-input" value="${escapeHtml(item.endDate || '')}">
-              </div>
-            </div>
-            <input type="text" class="form-input memory-long-title" value="${escapeHtml(item.title || '')}" placeholder="目录标题（≤25字，含人名与事件；降级为目录后凭它召回）" style="margin-bottom:6px;">
-            <textarea class="form-textarea memory-content memory-long-content" placeholder="长期记忆内容（点击展开大窗口编辑）" rows="3" readonly>${escapeHtml(item.content || '')}</textarea>
-          </div>
-        `).join('');
-
-    const shortTermModeHint = `每轮滞后 ${RAW_WINDOW_TURNS} 轮总结 · 进度 ${shortTerm.length}/${SHORT_TERM_LIMIT}（满 ${SHORT_TERM_LIMIT} 条自动压缩成长期记忆）`;
-
     // 更新顶部页签的标题与激活态（短文案 + 数量，避免撑破窄屏）
     const shortTabBtn = document.getElementById('tab-short');
     const longTabBtn = document.getElementById('tab-long');
@@ -330,176 +261,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         if (btn) btn.textContent = `补充（${supplementEdit.trim().length}字）`;
         updateCounter();
       });
-      updateCounter();
-      return;
-    }
-
-    if (activeTab === 'facts') {
-      const promiseRows = (factsEdit.promises || []).map((p, index) => `
-        <div class="memory-card" data-index="${index}" style="display:flex; flex-direction:column; gap:6px;">
-          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-            <select class="form-input fact-promise-status" data-index="${index}" style="width:100px;">
-              <option value="open" ${p.status !== 'done' ? 'selected' : ''}>进行中</option>
-              <option value="done" ${p.status === 'done' ? 'selected' : ''}>已完成</option>
-            </select>
-            <button class="btn btn-danger btn-small btn-del-promise" data-index="${index}">删除</button>
-          </div>
-          <input type="text" class="form-input fact-promise-text" data-index="${index}" value="${escapeHtml(p.text)}" placeholder="约定内容（敷衍/欺骗式承诺前加【敷衍】【谎言】标记）">
-        </div>
-      `).join('');
-      const relationRows = (factsEdit.relations || []).map((r, index) => `
-        <div class="memory-card" style="display:flex; flex-direction:column; gap:6px;">
-          <div style="display:flex; gap:8px; align-items:center;">
-            <input type="text" class="form-input fact-rel-from" data-index="${index}" value="${escapeHtml(r.from || '')}" placeholder="A（全名）" style="width:110px;">
-            <span style="flex-shrink:0;">→</span>
-            <input type="text" class="form-input fact-rel-to" data-index="${index}" value="${escapeHtml(r.to || '')}" placeholder="B（全名或主控）" style="width:110px;">
-            <button class="btn btn-danger btn-small btn-del-rel" data-index="${index}">删除</button>
-          </div>
-          <input type="text" class="form-input fact-rel-note" data-index="${index}" value="${escapeHtml(r.note || '')}" placeholder="A 是 B 的…（身份关系+状态词；指向主控可附数值段，如：同事｜好感45/100｜阶段:信任）">
-        </div>
-      `).join('');
-      const intelRows = (factsEdit.intel || []).map((item, index) => `
-        <div class="memory-card" style="display:flex; flex-direction:column; gap:6px;">
-          <div style="display:flex; gap:8px; align-items:center;">
-            <input type="text" class="form-input fact-intel-text" data-index="${index}" value="${escapeHtml(item.text || '')}" placeholder="情报内容（如：主控已婚）" style="flex:1;">
-            <button class="btn btn-danger btn-small btn-del-intel" data-index="${index}">删除</button>
-          </div>
-          <input type="text" class="form-input fact-intel-knownby" data-index="${index}" value="${escapeHtml((item.knownBy || []).join('、'))}" placeholder="可知名单：人名用顿号分隔；全员写「公开」">
-        </div>
-      `).join('');
-
-      const worldRows = (factsEdit.worldEvents || []).map((w, index) => `
-        <div class="memory-card" style="display:flex; gap:8px; align-items:center;">
-          <input type="text" class="form-input fact-world-text" data-index="${index}" value="${escapeHtml(w.text || '')}" placeholder="事件名或NPC姓名→阶段/近况（如：林静→相亲失败，情绪低落）" style="flex:1;">
-          <button class="btn btn-danger btn-small btn-del-world" data-index="${index}">删除</button>
-        </div>
-      `).join('');
-
-      contentEl.innerHTML = `
-      <div class="memory-section">
-        <div class="memory-section-title">事实备忘</div>
-        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 12px;">
-          由每轮记忆总结自动抽取并合并；压缩短期/长期<strong>不会清空</strong>本页。发送时注入 system【事实备忘】（含知情约束）。可在此手改。约定/情报有录入门槛（跨轮才兑现的约定、有保密价值的情报），清单常年应保持很少。
-        </div>
-        <div class="memory-section-title" style="font-size:0.95rem;">未完成/历史约定（${factsEdit.promises.length}）</div>
-        <div class="memory-list">${promiseRows || '<div class="memory-empty">暂无约定</div>'}</div>
-        <button class="btn btn-ghost btn-small" id="btn-add-promise" style="margin:8px 0 16px;">＋ 添加约定</button>
-        <div class="memory-section-title" style="font-size:0.95rem;">人物关系（${factsEdit.relations.length}）</div>
-        <div class="memory-list">${relationRows || '<div class="memory-empty">暂无关系记录</div>'}</div>
-        <button class="btn btn-ghost btn-small" id="btn-add-rel" style="margin:8px 0 16px;">＋ 添加关系</button>
-        <div class="memory-section-title" style="font-size:0.95rem;">世界动态（${(factsEdit.worldEvents || []).length}）</div>
-        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">
-          公共事件与重要NPC的场外个人线（格式"事件名或NPC姓名→阶段/近况"）。按事件名合并、同名保留最新；随【事实备忘】注入，NPC重新出场时AI须承接；标「完结」的仅作历史参考。
-        </div>
-        <div class="memory-list">${worldRows || '<div class="memory-empty">暂无世界动态</div>'}</div>
-        <button class="btn btn-ghost btn-small" id="btn-add-world" style="margin:8px 0 16px;">＋ 添加动态</button>
-        <div class="memory-section-title" style="font-size:0.95rem;">知情情报（${(factsEdit.intel || []).length}）</div>
-        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">
-          每条情报 + knownBy（谁可当已知；全员可用「公开」）。与约定/关系常一起变。注入时生成硬性知情约束。
-        </div>
-        <div class="memory-list">${intelRows || '<div class="memory-empty">暂无知情记录</div>'}</div>
-        <button class="btn btn-ghost btn-small" id="btn-add-intel" style="margin:8px 0 8px;">＋ 添加情报</button>
-      </div>
-      `;
-
-      contentEl.querySelectorAll('.fact-promise-text').forEach((input) => {
-        input.addEventListener('change', () => {
-          const i = parseInt(input.dataset.index, 10);
-          if (factsEdit.promises[i]) factsEdit.promises[i].text = input.value.trim();
-        });
-      });
-      contentEl.querySelectorAll('.fact-promise-status').forEach((sel) => {
-        sel.addEventListener('change', () => {
-          const i = parseInt(sel.dataset.index, 10);
-          if (factsEdit.promises[i]) factsEdit.promises[i].status = sel.value === 'done' ? 'done' : 'open';
-        });
-      });
-      contentEl.querySelectorAll('.btn-del-promise').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          factsEdit.promises.splice(parseInt(btn.dataset.index, 10), 1);
-          renderContent();
-        });
-      });
-      contentEl.querySelector('#btn-add-promise')?.addEventListener('click', () => {
-        factsEdit.promises.push({ text: '', status: 'open' });
-        renderContent();
-      });
-
-      contentEl.querySelectorAll('.fact-rel-from').forEach((input) => {
-        input.addEventListener('change', () => {
-          const i = parseInt(input.dataset.index, 10);
-          if (factsEdit.relations[i]) factsEdit.relations[i].from = input.value.trim();
-        });
-      });
-      contentEl.querySelectorAll('.fact-rel-to').forEach((input) => {
-        input.addEventListener('change', () => {
-          const i = parseInt(input.dataset.index, 10);
-          if (factsEdit.relations[i]) factsEdit.relations[i].to = input.value.trim();
-        });
-      });
-      contentEl.querySelectorAll('.fact-rel-note').forEach((input) => {
-        input.addEventListener('change', () => {
-          const i = parseInt(input.dataset.index, 10);
-          if (factsEdit.relations[i]) factsEdit.relations[i].note = input.value.trim();
-        });
-      });
-      contentEl.querySelectorAll('.btn-del-rel').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          factsEdit.relations.splice(parseInt(btn.dataset.index, 10), 1);
-          renderContent();
-        });
-      });
-      contentEl.querySelector('#btn-add-rel')?.addEventListener('click', () => {
-        factsEdit.relations.push({ from: '', to: '主控', note: '' });
-        renderContent();
-      });
-
-      contentEl.querySelectorAll('.fact-world-text').forEach((input) => {
-        input.addEventListener('change', () => {
-          const i = parseInt(input.dataset.index, 10);
-          if (factsEdit.worldEvents[i]) factsEdit.worldEvents[i].text = input.value.trim();
-        });
-      });
-      contentEl.querySelectorAll('.btn-del-world').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          factsEdit.worldEvents.splice(parseInt(btn.dataset.index, 10), 1);
-          renderContent();
-        });
-      });
-      contentEl.querySelector('#btn-add-world')?.addEventListener('click', () => {
-        if (!Array.isArray(factsEdit.worldEvents)) factsEdit.worldEvents = [];
-        factsEdit.worldEvents.push({ text: '' });
-        renderContent();
-      });
-
-      contentEl.querySelectorAll('.fact-intel-text').forEach((input) => {
-        input.addEventListener('change', () => {
-          const i = parseInt(input.dataset.index, 10);
-          if (factsEdit.intel[i]) factsEdit.intel[i].text = input.value.trim();
-        });
-      });
-      contentEl.querySelectorAll('.fact-intel-knownby').forEach((input) => {
-        input.addEventListener('change', () => {
-          const i = parseInt(input.dataset.index, 10);
-          if (!factsEdit.intel[i]) return;
-          factsEdit.intel[i].knownBy = input.value
-            .split(/[,，;；、]/)
-            .map((s) => s.trim())
-            .filter(Boolean);
-        });
-      });
-      contentEl.querySelectorAll('.btn-del-intel').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          factsEdit.intel.splice(parseInt(btn.dataset.index, 10), 1);
-          renderContent();
-        });
-      });
-      contentEl.querySelector('#btn-add-intel')?.addEventListener('click', () => {
-        if (!Array.isArray(factsEdit.intel)) factsEdit.intel = [];
-        factsEdit.intel.push({ text: '', knownBy: [] });
-        renderContent();
-      });
-
       updateCounter();
       return;
     }
@@ -711,165 +472,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       return;
     }
 
-    contentEl.innerHTML = activeTab === 'short'
-      ? `
-      <div class="memory-section">
-        <div class="memory-section-title">短期记忆（${shortTerm.length}/${SHORT_TERM_LIMIT}，满 ${SHORT_TERM_LIMIT} 条自动压缩成长期记忆）</div>
-        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">生成方式：${shortTermModeHint}</div>
-        <div style="margin: 0 0 12px;"><button class="btn btn-ghost btn-small" id="btn-manual-condense">📦 压缩当前短期为长期（${shortTerm.length} 条）</button></div>
-        <div class="memory-list" id="short-term-list">
-          ${shortTermHtml}
-        </div>
-      </div>
-      `
-      : `
-      <div class="memory-section">
-        <div class="memory-section-title">长期记忆（${longTerm.length} 条）</div>
-        <div style="margin: 0 0 12px;"><button class="btn btn-ghost btn-small" id="btn-ai-condense">🤖 精简长期</button></div>
-        <div class="memory-list" id="long-term-list">
-          ${longTermHtml}
-        </div>
-      </div>
-      `;
-
-    // 绑定短期记忆：删除 + 实时同步到本地数组
-    contentEl.querySelectorAll('.memory-card-short').forEach((card, index) => {
-      const dateInput = card.querySelector('input[type="date"]');
-      const contentTextarea = card.querySelector('textarea');
-      const deleteBtn = card.querySelector('.btn-delete-short');
-
-      const syncToState = () => {
-        shortTermMemories[index] = {
-          ...shortTermMemories[index],
-          date: dateInput.value,
-          content: contentTextarea.value
-        };
-        updateCounter();
-      };
-
-      dateInput.addEventListener('input', syncToState);
-      contentTextarea.addEventListener('input', syncToState);
-
-      deleteBtn.addEventListener('click', () => {
-        shortTermMemories.splice(index, 1);
-        renderContent();
-        updateCounter();
-      });
-    });
-
-    // 手动压缩当前短期为长期（使用记忆副 API）
-    const manualCondenseBtn = contentEl.querySelector('#btn-manual-condense');
-    if (manualCondenseBtn) {
-      manualCondenseBtn.disabled = character.memoryEnabled === false;
-      manualCondenseBtn.addEventListener('click', async () => {
-        if (character.memoryEnabled === false) {
-          alert('记忆系统已关闭，无法压缩');
-          return;
-        }
-        if (shortTermMemories.length === 0) {
-          alert('当前没有短期记忆可压缩');
-          return;
-        }
-        if (!confirm(`把当前 ${shortTermMemories.length} 条短期记忆压缩成 1 条长期记忆？`)) return;
-        manualCondenseBtn.textContent = '压缩中...';
-        manualCondenseBtn.disabled = true;
-        try {
-          // 参考最近几条旧长期（只读）与事实备忘：与自动压缩同一条路径
-          const long = await summarizeShortTermMemories(shortTermMemories, {
-            previousLongTerm: longTermMemories.slice(-LONG_TERM_REFERENCE_COUNT),
-            factsMemo: formatFactsMemo(factsEdit, mcName)
-          });
-          long.sourceRounds = shortTermMemories.map(s => s.round).filter(r => Number.isFinite(r));
-          long.sourceTimestamps = shortTermMemories.map(s => s.turnTimestamp).filter(Boolean);
-          longTermMemories.push(long);
-          shortTermMemories = [];
-          activeTab = 'long';
-          renderContent();
-        } catch (e) {
-          alert('压缩失败：' + e.message);
-          manualCondenseBtn.textContent = `📦 压缩当前短期为长期（${shortTermMemories.length} 条）`;
-          manualCondenseBtn.disabled = false;
-        }
-      });
-    }
-
-    // AI 精简长期记忆（按钮在长期页内容区内）
-    const aiCondenseBtn = contentEl.querySelector('#btn-ai-condense');
-    if (aiCondenseBtn) {
-      aiCondenseBtn.addEventListener('click', async () => {
-        if (!confirm('让 AI 自动精简长期记忆？这会覆盖当前长期记忆，重点压缩事件记录。')) return;
-        aiCondenseBtn.textContent = '精简中...';
-        aiCondenseBtn.disabled = true;
-        try {
-          const mergedSourceRounds = longTermMemories.flatMap(lt => lt.sourceRounds || []).filter(r => Number.isFinite(r));
-          const mergedSourceTimestamps = longTermMemories.flatMap(lt => lt.sourceTimestamps || []).filter(Boolean);
-          const condensed = await condenseLongTermMemory(longTermMemories);
-          longTermMemories = (condensed || []).map((c, i) => ({
-            ...c,
-            sourceRounds: i === 0 ? mergedSourceRounds : [],
-            sourceTimestamps: i === 0 ? mergedSourceTimestamps : []
-          }));
-          renderContent();
-        } catch (error) {
-          alert('精简失败：' + error.message);
-          aiCondenseBtn.textContent = '🤖 精简长期';
-          aiCondenseBtn.disabled = false;
-        }
-      });
-    }
-
-    // 绑定长期记忆：删除 + 日期同步 + 大窗口编辑
-    contentEl.querySelectorAll('.memory-card-long').forEach((card, index) => {
-      const dateInputs = card.querySelectorAll('input[type="date"]');
-      const startDateInput = dateInputs[0];
-      const endDateInput = dateInputs[1];
-      const contentTextarea = card.querySelector('.memory-long-content');
-      const deleteBtn = card.querySelector('.btn-delete-long');
-      const pinBtn = card.querySelector('.btn-pin-long');
-      const titleInput = card.querySelector('.memory-long-title');
-
-      const syncDatesToState = () => {
-        longTermMemories[index].startDate = startDateInput.value;
-        longTermMemories[index].endDate = endDateInput.value;
-        updateCounter();
-      };
-
-      startDateInput.addEventListener('input', syncDatesToState);
-      endDateInput.addEventListener('input', syncDatesToState);
-
-      deleteBtn.addEventListener('click', () => {
-        longTermMemories.splice(index, 1);
-        renderContent();
-        updateCounter();
-      });
-
-      // 加星常驻：全文注入、永不降级为目录行（主线/承重记忆用）
-      pinBtn.addEventListener('click', () => {
-        longTermMemories[index].pinned = !longTermMemories[index].pinned;
-        renderContent();
-        updateCounter();
-      });
-
-      titleInput.addEventListener('change', () => {
-        longTermMemories[index].title = titleInput.value.trim();
-      });
-
-      contentTextarea.addEventListener('click', () => {
-        const item = longTermMemories[index];
-        openBigTextEditor({
-          title: '编辑长期记忆',
-          value: item.content || '',
-          placeholder: '长期记忆内容',
-          onSave: (newValue) => {
-            item.content = newValue;
-            renderContent();
-            updateCounter();
-          }
-        });
-      });
-    });
-
-    updateCounter();
   }
 
   renderContent();
@@ -898,46 +500,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
 
   document.getElementById('btn-save-memory').addEventListener('click', async () => {
     try {
-      // 保存前把当前页未 blur 的输入同步进本地副本
-      contentEl.querySelectorAll('.fact-promise-text').forEach((input) => {
-        const i = parseInt(input.dataset.index, 10);
-        if (factsEdit.promises[i]) factsEdit.promises[i].text = input.value.trim();
-      });
-      contentEl.querySelectorAll('.fact-promise-status').forEach((sel) => {
-        const i = parseInt(sel.dataset.index, 10);
-        if (factsEdit.promises[i]) factsEdit.promises[i].status = sel.value === 'done' ? 'done' : 'open';
-      });
-      contentEl.querySelectorAll('.fact-rel-from').forEach((input) => {
-        const i = parseInt(input.dataset.index, 10);
-        if (factsEdit.relations[i]) factsEdit.relations[i].from = input.value.trim();
-      });
-      contentEl.querySelectorAll('.fact-rel-to').forEach((input) => {
-        const i = parseInt(input.dataset.index, 10);
-        if (factsEdit.relations[i]) factsEdit.relations[i].to = input.value.trim();
-      });
-      contentEl.querySelectorAll('.fact-rel-note').forEach((input) => {
-        const i = parseInt(input.dataset.index, 10);
-        if (factsEdit.relations[i]) factsEdit.relations[i].note = input.value.trim();
-      });
-      contentEl.querySelectorAll('.fact-intel-text').forEach((input) => {
-        const i = parseInt(input.dataset.index, 10);
-        if (factsEdit.intel[i]) factsEdit.intel[i].text = input.value.trim();
-      });
-      contentEl.querySelectorAll('.fact-intel-knownby').forEach((input) => {
-        const i = parseInt(input.dataset.index, 10);
-        if (!factsEdit.intel[i]) return;
-        factsEdit.intel[i].knownBy = input.value
-          .split(/[,，;；、]/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-      });
-
-      // 过滤掉内容为空的对象，同时保留本地编辑结果
-      const newShortTerm = shortTermMemories.filter(item => item && String(item.content).trim());
-      const newLongTerm = longTermMemories.filter(item => item && String(item.content).trim());
-
-      console.log('[memory editor] save shortTerm:', newShortTerm.length, 'longTerm:', newLongTerm.length);
-
       // 混合记忆：保存状态、索引、一级长期摘要与召回记录；原文档案不按摘要过滤
       stateEdit.characters = stateEdit.characters.filter((c) => String(c.name || '').trim());
       stateEdit.promises = stateEdit.promises.filter((p) => String(p.text || '').trim());
@@ -958,22 +520,8 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       chat.memory.archive = archiveEdit;
       chat.memory.longTermSummaries = longTermSummariesEdit;
       chat.memory.recallLog = recallLogEdit;
-      chat.memory.shortTerm = newShortTerm;
-      chat.memory.longTerm = newLongTerm;
       // 对话补充设定：单文本区，常驻注入 system（仅本对话生效）
       chat.memory.supplement = supplementEdit.trim();
-      // 事实备忘（过滤空行；含知情情报 intel + knownBy）
-      // worldEvents 已废弃（与状态栏事件追踪重复）：不再保存，旧数据在此处自然清除
-      chat.memory.facts = normalizeFacts({
-        promises: (factsEdit.promises || []).filter((p) => p && String(p.text || '').trim()),
-        relations: (factsEdit.relations || []).filter((r) => r && String(r.from || r.name || '').trim()),
-        intel: (factsEdit.intel || [])
-          .filter((i) => i && String(i.text || '').trim())
-          .map((i) => ({
-            text: String(i.text).trim(),
-            knownBy: Array.isArray(i.knownBy) ? i.knownBy : []
-          }))
-      }, mcName);
       // 免费生图记忆（种子 + 英文锚点）：保留有合法种子或非空锚点的记录
       const cleanedSeeds = {};
       for (const [name, rec] of Object.entries(seedArchiveEdit)) {

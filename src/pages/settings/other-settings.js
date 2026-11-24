@@ -53,7 +53,14 @@ export async function renderOtherSettingsModal() {
               <input type="checkbox" id="setting-memory-correction" ${behavior.memoryCorrection !== false ? 'checked' : ''}>
               <span>记忆修正通道（允许 AI 上报记忆矛盾）</span>
             </label>
-            <div class="form-hint">开启后，AI 发现【长期记忆】或【事实备忘】与剧情现状矛盾时，会在回复末尾输出「记忆修正：…」，记忆总结时据此自动更正事实备忘。若所用模型频繁误报修正，可在此关闭。</div>
+            <div class="form-hint">开启后，AI 发现【当前状态账本】、【连续剧情脉络】或【长期记忆】与剧情现状矛盾时，会在回复末尾输出「记忆修正：…」，后台整理时据此自动更新状态账本。若所用模型频繁误报修正，可在此关闭。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="setting-character-calibration" ${behavior.characterCalibration !== false ? 'checked' : ''}>
+              <span>每轮人设校准（本轮末尾核对人格、关系与亲密边界）</span>
+            </label>
+            <div class="form-hint">默认开启。在每次发送的用户消息末尾附带精简校准指令（不写历史），同时适配角色卡与模拟器状态账本，防止长局跑偏或边界骤崩。</div>
           </div>
           <div class="form-group">
             <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
@@ -202,6 +209,7 @@ export async function renderOtherSettingsModal() {
       autoCompleteLastModule: document.getElementById('setting-auto-complete').checked,
       autoAdvancePrompt: (autoAdvanceEl.value.trim() === DEFAULT_AUTO_ADVANCE_PROMPT.trim()) ? '' : autoAdvanceEl.value.trim(),
       memoryCorrection: document.getElementById('setting-memory-correction').checked,
+      characterCalibration: document.getElementById('setting-character-calibration').checked,
       immersiveActing: document.getElementById('setting-immersive-acting').checked,
       immersiveShowDontTell: document.getElementById('setting-immersive-showdonttell').checked,
       immersiveIrrational: document.getElementById('setting-immersive-irrational').checked,

@@ -2,13 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildImmersiveActingRule, IMMERSIVE_ACTING_RULE, CHARACTER_CALIBRATION_RULE } from '../src/services/narrative-rules.js';
 
-test('每轮人设校准：覆盖人格、关系名分、性设定与对主控认知', () => {
-  assert.ok(CHARACTER_CALIBRATION_RULE.includes('近期回复只能延续人设，不能反向覆盖角色卡'));
+test('每轮人设校准：精简并适配角色卡与模拟器状态账本，覆盖人格、关系名分、性设定与对主控认知', () => {
+  assert.ok(CHARACTER_CALIBRATION_RULE.includes('角色卡或当前状态账本'));
+  assert.ok(CHARACTER_CALIBRATION_RULE.includes('不得反向覆盖人设'));
   assert.ok(CHARACTER_CALIBRATION_RULE.includes('炮友/露水关系'));
   assert.ok(CHARACTER_CALIBRATION_RULE.includes('恋人式吃醋'));
   assert.ok(CHARACTER_CALIBRATION_RULE.includes('亲密与性设定'));
   assert.ok(CHARACTER_CALIBRATION_RULE.includes('突然放荡'));
-  assert.ok(CHARACTER_CALIBRATION_RULE.includes('神化'));
+  assert.ok(CHARACTER_CALIBRATION_RULE.includes('不神化'));
   assert.ok(CHARACTER_CALIBRATION_RULE.includes('不篡改历史'));
 });
 

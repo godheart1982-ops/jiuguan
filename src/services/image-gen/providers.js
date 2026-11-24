@@ -52,7 +52,7 @@ export function imageProviderDisplayName(provider) {
  * @param {string} opts.prompt  提示词（中文原生支持，建议 ≤300 汉字）
  */
 export async function generateSeedreamImage({ apiKey, baseUrl, model, size, prompt }) {
-  if (!apiKey) throw new Error('未配置 Seedream API Key（在其他设置 → 插图功能中填写）');
+  if (!apiKey) throw new Error('未配置 Seedream API Key（在侧边栏「插图设置」中填写）');
   if (!prompt || !prompt.trim()) throw new Error('提示词为空');
 
   const url = `${(baseUrl || '').replace(/\/+$/, '')}/images/generations`;
@@ -200,7 +200,7 @@ export async function generateWanxImage({ apiKey, baseUrl, model, size, prompt }
  * @param {string} opts.prompt     提示词（中文支持）
  */
 export async function generateGrokImage({ apiKey, baseUrl, model, aspectRatio, resolution, prompt }) {
-  if (!apiKey) throw new Error('未配置 Grok API Key（在其他设置 → 插图功能中填写）');
+  if (!apiKey) throw new Error('未配置 Grok API Key（在侧边栏「插图设置」中填写）');
   if (!prompt || !prompt.trim()) throw new Error('提示词为空');
 
   const url = `${(baseUrl || 'https://api.x.ai/v1').replace(/\/+$/, '')}/images/generations`;
@@ -423,7 +423,7 @@ export async function generateGrokWebImage({ apiKey, baseUrl, model, prompt, ima
  * @param {string} opts.apiMode    'generateContent'（官方，默认）| 'chatCompletions'（中转 OpenAI 聊天格式）
  */
 export async function generateGeminiImage({ apiKey, baseUrl, model, aspectRatio, imageSize, prompt, apiMode }) {
-  if (!apiKey) throw new Error('未配置 Gemini API Key（在其他设置 → 插图功能中填写）');
+  if (!apiKey) throw new Error('未配置 Gemini API Key（在侧边栏「插图设置」中填写）');
   if (!prompt || !prompt.trim()) throw new Error('提示词为空');
 
   // 中转站把 Gemini 生图包装成 OpenAI chat/completions 的情况：走完全不同的请求/应答格式

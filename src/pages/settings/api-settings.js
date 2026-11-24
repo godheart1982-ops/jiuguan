@@ -196,7 +196,7 @@ export async function renderApiSettingsModal() {
                 </select>
                 <button class="btn btn-ghost" id="btn-load-sub-profile" type="button">读取</button>
               </div>
-              <div class="form-hint">副 API 专门用于短期/长期记忆的总结与精简，可指向另一个服务商的便宜模型。读取方案会自动填入下方，可再改；Base URL / Key / 模型任一留空则记忆调用回退使用主 API。</div>
+              <div class="form-hint">副 API 专门用于每轮对话索引、状态更新、长期记忆压缩与远史召回，可指向另一个服务商的便宜快速模型。读取方案会自动填入下方，可再改；Base URL / Key / 模型任一留空则回退使用主 API。</div>
             </div>
             <div class="form-group">
               <label class="form-label">API Base URL</label>

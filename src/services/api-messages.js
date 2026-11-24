@@ -120,7 +120,7 @@ export async function buildMessages(character, historyMessages, userMessage, mem
       '>### 🖼️插图\n![角色名](seedream://)\n' +
       '选角规则：有女性角色时选本轮互动中最重要的那一位（通常是主控的互动对象）；没有女性角色时跳过插图模块。\n' +
       'alt 文本规则【强制】：只写该女性角色名，禁止写场景描述或"主控"。\n' +
-      '禁止在括号内填写任何描述或链接，画面描述由 App 根据你的回复正文自动生成（只画该角色单人，主控不入画）。\n' +
+      '禁止在括号内填写任何描述或链接，画面描述由 App 根据你的回复正文自动生成。\n' +
       '【绝对禁止】禁止输出 local-img:// 或任何本地文件路径、http 图片链接；你能输出的插图格式只有上面这一种空标记。';
   } else if (!metaCommand && imageEnabled) {
     // 免费模式（pollinations）：AI 直接拼在线生图 URL
@@ -182,8 +182,8 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   if (recalledBlock) systemContent += '\n\n' + recalledBlock;
 
   // 对话补充设定：用户手动维护的单档覆盖补丁（记忆编辑器「补充」页签）；
-  // 与角色卡初始设定冲突时以本区为准，仅当前对话生效
-  const supplement = memoryOn && memory ? String(memory.supplement || '').trim() : '';
+  // 与角色卡初始设定冲突时以本区为准，仅当前对话生效（独立于记忆总结开关，关闭记忆时仍保留世界/模拟器设定）
+  const supplement = memory ? String(memory.supplement || '').trim() : '';
   if (supplement) {
     systemContent += '\n\n【对话补充设定】（用户对本剧情的补充与修正，仅当前对话生效；与角色卡初始设定冲突时以本区为准）\n' + supplement;
   }
@@ -208,7 +208,7 @@ export async function buildMessages(character, historyMessages, userMessage, mem
 
   // 元指令模式说明：替代全部剧情向注入（格式/思维链/插图等已在上方跳过），剧情状态本轮冻结
   if (metaCommand) {
-    systemContent += '\n\n【元指令模式】本轮用户输入以 $ 开头，是系统指令而非剧情内容：不推进剧情与时间、不输出任何格式模块（状态栏/世界信息/行动选项/插图等一律不输出）、不写思维链。基于角色卡、世界书、记忆与事实备忘，直接、如实地回答指令本身；若指令要求修改设定或剧情走向，明确确认你将如何执行。';
+    systemContent += '\n\n【元指令模式】本轮用户输入以 $ 开头，是系统指令而非剧情内容：不推进剧情与时间、不输出任何格式模块（状态栏/世界信息/行动选项/插图等一律不输出）、不写思维链。基于角色卡、世界书、当前状态账本、连续剧情脉络、长期记忆与对话补充设定，直接、如实地回答指令本身；若指令要求修改设定或剧情走向，明确确认你将如何执行。';
   }
 
   // 默认破甲条目是 system 的最后一段；解绑或关闭世界书时此块为空，不会残留。
@@ -241,10 +241,11 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   const userContent = webSearchRef
     ? (webSearchRef + '\n\n【用户本轮输入】\n' + userMessage)
     : userMessage;
-  // 选项事实边界 + 人设校准紧跟本轮输入，仅存在于 API 请求；元指令无需注入
+  // 选项事实边界 + 人设校准紧跟本轮输入，仅存在于 API 请求；元指令无需注入，人设校准可在「其他设置 → 生成行为」关闭
+  const calibrationOn = !(config.behavior && config.behavior.characterCalibration === false);
   const requestUserContent = metaCommand
     ? userContent
-    : [userContent, actionOptionContext, CHARACTER_CALIBRATION_RULE].filter(Boolean).join('\n\n');
+    : [userContent, actionOptionContext, calibrationOn ? CHARACTER_CALIBRATION_RULE : ''].filter(Boolean).join('\n\n');
   messages.push({
     role: 'user',
     content: requestUserContent
