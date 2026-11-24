@@ -1,7 +1,7 @@
-// 记忆编辑器：🧠 全屏弹窗；当前状态/对话索引/长期记忆/召回记录 + 生图/补充/剧情辅助页签。
+// 记忆编辑器：🧠 全屏弹窗；当前状态/对话索引/长期记忆/召回记录 + 生图/补充辅助页签。
 // 自包含模块——自己建遮罩、绑事件、保存，输入仅 (chat, character, onUpdate)，与聊天页状态零耦合。
 // migrateMemory 也住在这里：它既被编辑器调用，也被聊天页打开旧对话时做结构迁移。
-import { saveCharacter, saveChat, saveAnchorRefImage, deleteAnchorRefImage, getGeneratedImageDataUrl, getPlotPresets, savePlotPreset, deletePlotPreset } from '../services/storage.js';
+import { saveCharacter, saveChat, saveAnchorRefImage, deleteAnchorRefImage, getGeneratedImageDataUrl } from '../services/storage.js';
 import {
   summarizeShortTermMemories,
   condenseLongTermMemory,
@@ -13,7 +13,6 @@ import {
 } from '../services/api-memory.js';
 import { anchorTextOf, anchorImgOf } from '../services/image-gen.js';
 import { migrateChat } from '../services/migrations.js';
-import { promptText } from '../utils/prompt-dialog.js';
 import { countTokens } from '../utils/tokenizer.js';
 import { openBigTextEditor } from '../utils/big-editor.js';
 import { renderMemoryArchivePanel } from './memory-archive-panel.js';
@@ -92,25 +91,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   );
   // 对话补充设定（本地副本，保存时写回 chat.memory.supplement；常驻注入 system，仅本对话生效）
   let supplementEdit = String((chat.memory && chat.memory.supplement) || '');
-  // 剧情线（本地副本，保存时写回 chat.plot；{mode, current, stages:[{title, content, condition, branches}]}）
-  let plotEdit = (() => {
-    const p = chat.plot;
-    if (p && typeof p === 'object') {
-      return {
-        mode: p.mode === 'hard' ? 'hard' : 'soft',
-        current: Number.isFinite(p.current) ? p.current : 1,
-        stages: (Array.isArray(p.stages) ? p.stages : []).map((s) => ({
-          title: String((s && s.title) || ''),
-          content: String((s && s.content) || ''),
-          condition: String((s && s.condition) || ''),
-          branches: String((s && s.branches) || '')
-        }))
-      };
-    }
-    return { mode: 'soft', current: 1, stages: [] };
-  })();
-  // 剧情线库（全局预设，打开后异步加载）
-  let plotPresets = {};
   // 主记忆页签：state 当前状态 / archive 对话索引 / recalls 召回记录；其余为既有辅助页签
   let activeTab = 'state';
 
@@ -146,7 +126,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-seeds" data-tab="seeds">免费生图记忆</button>
             <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-anchors" data-tab="anchors">外貌锚点</button>
             <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-supplement" data-tab="supplement">补充设定</button>
-            <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-plot" data-tab="plot">剧情线</button>
           </div>
         </div>
         <div class="memory-tab-content" id="memory-content">
@@ -162,12 +141,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   `;
 
   document.body.appendChild(overlay);
-
-  // 剧情线库异步加载（不阻塞弹窗；加载完成时若正停在剧情页签则重绘出方案列表）
-  getPlotPresets().then((p) => {
-    plotPresets = p || {};
-    if (activeTab === 'plot') renderContent();
-  }).catch(() => {});
 
   const contentEl = document.getElementById('memory-content');
   const counterEl = document.getElementById('memory-counter');
@@ -323,8 +296,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
     const seedsTabBtn = document.getElementById('tab-seeds');
     const anchorsTabBtn = document.getElementById('tab-anchors');
     const supplementTabBtn = document.getElementById('tab-supplement');
-    const plotTabBtn = document.getElementById('tab-plot');
-    if (shortTabBtn && longTabBtn && longTermTabBtn && factsTabBtn && seedsTabBtn && anchorsTabBtn && supplementTabBtn && plotTabBtn) {
+    if (shortTabBtn && longTabBtn && longTermTabBtn && factsTabBtn && seedsTabBtn && anchorsTabBtn && supplementTabBtn) {
       shortTabBtn.textContent = `状态（${stateEdit.characters.length}）`;
       longTabBtn.textContent = `索引（${archiveEdit.length}）`;
       longTermTabBtn.textContent = `长期（${longTermSummariesEdit.length}）`;
@@ -332,7 +304,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       seedsTabBtn.textContent = `免费生图（${Object.keys(seedArchiveEdit).length}）`;
       anchorsTabBtn.textContent = `锚点（${Object.keys(appearanceAnchorsEdit).length}）`;
       supplementTabBtn.textContent = `补充（${supplementEdit.trim().length}字）`;
-      plotTabBtn.textContent = `剧情（${plotEdit.stages.length}）`;
       shortTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'state' ? 'btn-primary' : 'btn-ghost');
       longTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'archive' ? 'btn-primary' : 'btn-ghost');
       longTermTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'longTerm' ? 'btn-primary' : 'btn-ghost');
@@ -340,145 +311,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       seedsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'seeds' ? 'btn-primary' : 'btn-ghost');
       anchorsTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'anchors' ? 'btn-primary' : 'btn-ghost');
       supplementTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'supplement' ? 'btn-primary' : 'btn-ghost');
-      plotTabBtn.className = 'btn btn-small memory-tab-btn ' + (activeTab === 'plot' ? 'btn-primary' : 'btn-ghost');
-    }
-
-    if (activeTab === 'plot') {
-      const stageCards = plotEdit.stages.map((s, i) => {
-        const isCurrent = (plotEdit.current || 1) === i + 1;
-        return `
-        <div class="memory-card">
-          <div class="memory-card-header">
-            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; flex: 1; min-width: 0;" title="点圆点把当前阶段切到这里">
-              <input type="radio" name="plot-current" data-idx="${i}" ${isCurrent ? 'checked' : ''}>
-              <span style="font-size: 0.9rem; font-weight: 600;">第 ${i + 1} 阶段${isCurrent ? '（当前·注入中）' : ''}</span>
-            </label>
-            <button class="btn btn-ghost btn-small btn-plot-up" data-idx="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
-            <button class="btn btn-ghost btn-small btn-plot-down" data-idx="${i}" ${i === plotEdit.stages.length - 1 ? 'disabled' : ''}>↓</button>
-            <button class="btn btn-danger btn-small btn-plot-del" data-idx="${i}">删除</button>
-          </div>
-          <input type="text" class="form-input plot-title-input" data-idx="${i}" value="${escapeHtml(s.title)}" placeholder="阶段标题（如：破冰期）" style="margin-bottom: 6px;">
-          <textarea class="form-textarea plot-content-input" data-idx="${i}" rows="2" placeholder="方向/氛围/关键事件——写方向和节点，不写台词和结果；分支提示可直接写在文本里">${escapeHtml(s.content)}</textarea>
-          <input type="text" class="form-input plot-condition-input" data-idx="${i}" value="${escapeHtml(s.condition)}" placeholder="推进条件：什么发生了算走完这阶段（满足也不自动翻章，等你触发）" style="margin-top: 6px;">
-          <input type="text" class="form-input plot-branches-input" data-idx="${i}" value="${escapeHtml(s.branches)}" placeholder="支线种子（可空）：本阶段可能长出的支线，长出后由状态栏事件追踪承载" style="margin-top: 6px;">
-        </div>`;
-      }).join('');
-      contentEl.innerHTML = `
-      <div class="memory-section">
-        <div class="memory-section-title">剧情线（主剧情线，把控整体走向）</div>
-        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">只注入当前阶段，推进节奏归你：点阶段前的圆点直接切换当前阶段；聊天页「📖」按钮=收束本章并推进到下一阶段。引力=选择优先（可与自由世界书共存）；铁轨=剧情优先（建议卸载《世界运行底层规则》，自带掀桌条款）。支线种子长出后由状态栏「事件追踪」承载，不占指针。</div>
-        <div class="form-group" style="display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;">
-          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;"><input type="radio" name="plot-mode" value="soft" ${plotEdit.mode !== 'hard' ? 'checked' : ''}> 引力（选择优先）</label>
-          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;"><input type="radio" name="plot-mode" value="hard" ${plotEdit.mode === 'hard' ? 'checked' : ''}> 铁轨（剧情优先）</label>
-        </div>
-        <div class="form-group">
-          <label class="form-label">剧情线库（全局预设，读取为副本，改动不影响库）</label>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <select class="form-input" id="plot-preset-select" style="min-width: 150px; flex: 1;">
-              <option value="">-- 选择一条剧情线 --</option>
-              ${Object.keys(plotPresets).map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}
-            </select>
-            <button class="btn btn-ghost btn-small" id="btn-plot-load">读取</button>
-            <button class="btn btn-ghost btn-small" id="btn-plot-save-as">另存为…</button>
-            <button class="btn btn-ghost btn-small" id="btn-plot-del-preset">删除</button>
-          </div>
-        </div>
-        <div class="memory-list">${stageCards || '<div class="memory-empty">暂无阶段——从剧情线库读取，或手动添加</div>'}</div>
-        <button class="btn btn-ghost btn-small" id="btn-plot-add" style="margin-top: 8px;">＋ 添加阶段</button>
-      </div>
-      `;
-
-      contentEl.querySelectorAll('input[name="plot-mode"]').forEach((r) => {
-        r.addEventListener('change', () => { plotEdit.mode = r.value === 'hard' ? 'hard' : 'soft'; });
-      });
-      contentEl.querySelectorAll('input[name="plot-current"]').forEach((r) => {
-        r.addEventListener('change', () => {
-          plotEdit.current = Number(r.dataset.idx) + 1;
-          renderContent();
-        });
-      });
-      const bindPlotInput = (sel, field) => {
-        contentEl.querySelectorAll(sel).forEach((el) => {
-          el.addEventListener('change', () => {
-            const s = plotEdit.stages[Number(el.dataset.idx)];
-            if (s) s[field] = el.value;
-          });
-        });
-      };
-      bindPlotInput('.plot-title-input', 'title');
-      bindPlotInput('.plot-content-input', 'content');
-      bindPlotInput('.plot-condition-input', 'condition');
-      bindPlotInput('.plot-branches-input', 'branches');
-      contentEl.querySelectorAll('.btn-plot-del').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          plotEdit.stages.splice(Number(btn.dataset.idx), 1);
-          plotEdit.current = Math.min(plotEdit.current || 1, Math.max(plotEdit.stages.length, 1));
-          renderContent();
-        });
-      });
-      contentEl.querySelectorAll('.btn-plot-up').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const i = Number(btn.dataset.idx);
-          if (i <= 0) return;
-          [plotEdit.stages[i - 1], plotEdit.stages[i]] = [plotEdit.stages[i], plotEdit.stages[i - 1]];
-          renderContent();
-        });
-      });
-      contentEl.querySelectorAll('.btn-plot-down').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const i = Number(btn.dataset.idx);
-          if (i >= plotEdit.stages.length - 1) return;
-          [plotEdit.stages[i], plotEdit.stages[i + 1]] = [plotEdit.stages[i + 1], plotEdit.stages[i]];
-          renderContent();
-        });
-      });
-      const addPlotBtn = contentEl.querySelector('#btn-plot-add');
-      if (addPlotBtn) {
-        addPlotBtn.addEventListener('click', () => {
-          plotEdit.stages.push({ title: '', content: '', condition: '', branches: '' });
-          renderContent();
-        });
-      }
-      // 剧情线库：读取为副本（指针回 1）/ 另存为 / 删除
-      contentEl.querySelector('#btn-plot-load').addEventListener('click', () => {
-        const name = contentEl.querySelector('#plot-preset-select').value;
-        if (!name || !plotPresets[name]) { alert('请先选择一条剧情线'); return; }
-        if (plotEdit.stages.length && !confirm('读取会用库里的剧情线覆盖当前副本，确定吗？')) return;
-        const p = plotPresets[name];
-        plotEdit = {
-          mode: p.mode === 'hard' ? 'hard' : 'soft',
-          current: 1,
-          stages: (p.stages || []).map((s) => ({
-            title: String(s.title || ''), content: String(s.content || ''),
-            condition: String(s.condition || ''), branches: String(s.branches || '')
-          }))
-        };
-        renderContent();
-      });
-      contentEl.querySelector('#btn-plot-save-as').addEventListener('click', async () => {
-        const name = await promptText({
-          title: '保存到剧情线库',
-          placeholder: '剧情线名称，如：临海市-新人上位线'
-        });
-        if (name === null || !String(name).trim()) return;
-        const trimmed = String(name).trim();
-        if (plotPresets[trimmed] && !confirm(`剧情线 "${trimmed}" 已存在，确定覆盖吗？`)) return;
-        await savePlotPreset(trimmed, plotEdit);
-        plotPresets = await getPlotPresets().catch(() => plotPresets);
-        renderContent();
-        alert(`剧情线 "${trimmed}" 已保存`);
-      });
-      contentEl.querySelector('#btn-plot-del-preset').addEventListener('click', async () => {
-        const name = contentEl.querySelector('#plot-preset-select').value;
-        if (!name) { alert('请先选择一条剧情线'); return; }
-        if (!confirm(`确定删除剧情线 "${name}" 吗？（不影响当前对话的副本）`)) return;
-        await deletePlotPreset(name);
-        plotPresets = await getPlotPresets().catch(() => plotPresets);
-        renderContent();
-      });
-
-      updateCounter();
-      return;
     }
 
     if (activeTab === 'supplement') {
@@ -1051,7 +883,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
   document.getElementById('tab-seeds').addEventListener('click', () => { activeTab = 'seeds'; renderContent(); });
   document.getElementById('tab-anchors').addEventListener('click', () => { activeTab = 'anchors'; renderContent(); });
   document.getElementById('tab-supplement').addEventListener('click', () => { activeTab = 'supplement'; renderContent(); });
-  document.getElementById('tab-plot').addEventListener('click', () => { activeTab = 'plot'; renderContent(); });
 
   function closeEditor() {
     if (counterTimer) clearTimeout(counterTimer);
@@ -1161,24 +992,6 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         if (name.trim() && (text || img)) cleanedAnchors[name.trim()] = { text, img };
       }
       chat.appearanceAnchors = cleanedAnchors;
-      // 剧情线（对话级副本）：有阶段则写回；清空所有阶段=移除本对话的剧情线
-      const stagesClean = plotEdit.stages
-        .map((s) => ({
-          title: String(s.title || '').trim(),
-          content: String(s.content || '').trim(),
-          condition: String(s.condition || '').trim(),
-          branches: String(s.branches || '').trim()
-        }))
-        .filter((s) => s.title || s.content);
-      if (stagesClean.length) {
-        chat.plot = {
-          mode: plotEdit.mode === 'hard' ? 'hard' : 'soft',
-          current: Math.min(Math.max(1, plotEdit.current || 1), stagesClean.length),
-          stages: stagesClean
-        };
-      } else if (chat.plot) {
-        delete chat.plot;
-      }
 
       await saveChat(chat);
       if (onUpdate) onUpdate();

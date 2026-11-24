@@ -16,6 +16,8 @@ import {
   formatLongTermInjection,
   extractMemoryRecalls,
   matchLongTermRecalls,
+  resolveMemoryApi,
+  DEFAULT_MEMORY_TEMPERATURE,
   LONG_TERM_FULL_COUNT
 } from '../src/services/api-memory.js';
 
@@ -484,4 +486,34 @@ test('applyTurnFactsToMemory: 世界动态超过上限丢最旧', () => {
   }
   assert.equal(memory.facts.worldEvents.length, 15);
   assert.equal(memory.facts.worldEvents[0].text, '事件6→发酵');
+});
+
+test('resolveMemoryApi: 副 API 留空默认 0.2，且不受主 API 关闭温度开关的影响', () => {
+  const mainApi = {
+    baseUrl: 'https://main.api/v1',
+    apiKey: 'main-key',
+    model: 'claude-opus-4-7',
+    temperature: 0.9,
+    temperatureEnabled: false,
+    memoryApi: {
+      baseUrl: 'https://sub.api/v1',
+      apiKey: 'sub-key',
+      model: 'deepseek-flash',
+      temperature: null
+    }
+  };
+  const resolvedDefault = resolveMemoryApi(mainApi);
+  assert.equal(resolvedDefault.temperature, DEFAULT_MEMORY_TEMPERATURE);
+  assert.equal(resolvedDefault.temperatureEnabled, true);
+
+  const resolvedExplicit = resolveMemoryApi({
+    ...mainApi,
+    memoryApi: { ...mainApi.memoryApi, temperature: 0.3 }
+  });
+  assert.equal(resolvedExplicit.temperature, 0.3);
+  assert.equal(resolvedExplicit.temperatureEnabled, true);
+
+  const fallback = resolveMemoryApi({ ...mainApi, memoryApi: {} });
+  assert.equal(fallback.model, 'claude-opus-4-7');
+  assert.equal(fallback.temperatureEnabled, false);
 });

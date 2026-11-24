@@ -7,8 +7,11 @@ import {
   finalizeRecallSelections, chunkRecallCards, runRecallPipeline, sceneTimeFromText,
   syncMemoryProfiles, makeMemoryStateSnapshot, restoreMemoryStateSnapshot,
   memoryStateForRound, characterCardForMemoryRound, fillMissingIndexSceneTimes, queryNeedsHistoricalDetail,
-  filterCoveredRecallRows
+  filterCoveredRecallRows, shouldRunMemoryRecall, formatMemoryStateForRecall, cleanRecentAssistantForRecall,
+  formatCurrentMemoryState
 } from '../src/services/memory-engine.js';
+import { splitSystemForCache } from '../src/services/api-anthropic.js';
+import { longTermGroupId } from '../src/services/memory-long-term.js';
 import { resolveRawWindowSize } from '../src/services/api-messages.js';
 
 function makeRound(n, userText = `输入${n}`, aiText = `回复${n}`) {
@@ -463,4 +466,139 @@ test('常驻覆盖区后置去重：普通续写排除，明确旧事和长线�
     filterCoveredRecallRows(rows, 'normal', covered, true).map((row) => row.turnId),
     ['turn-1', 'turn-49', 'turn-120']
   );
+});
+
+test('Anthropic 缓存切分：从最早出现的动态记忆块切开，不把当前状态账本混入静态缓存', () => {
+  const staticPart = '角色卡设定\n\n【输出格式要求】...';
+  const dynamicPart = '\n\n【当前状态账本】\n场景：咖啡店\n\n【长期记忆】\n过去的事';
+  const blocks = splitSystemForCache(staticPart + dynamicPart);
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0].text, staticPart);
+  assert.deepEqual(blocks[0].cache_control, { type: 'ephemeral' });
+  assert.equal(blocks[1].text, dynamicPart);
+  assert.equal(blocks[1].cache_control, undefined);
+
+  const staticOnly = splitSystemForCache('纯静态角色卡');
+  assert.equal(staticOnly.length, 1);
+  assert.deepEqual(staticOnly[0].cache_control, { type: 'ephemeral' });
+});
+
+test('前置召回跳过策略：全员已在连续脉络且非原话核验时跳过；存在长期压缩或查原话时放行', () => {
+  const shortMemory = {
+    archive: Array.from({ length: 5 }, (_, i) => ({
+      turnId: `turn-${i + 1}`, round: i + 1, revision: `r${i + 1}`,
+      index: { title: `标题${i + 1}`, summary: `摘要${i + 1}` }
+    })),
+    longTermSummaries: []
+  };
+  assert.equal(shouldRunMemoryRecall(shortMemory, { userMessage: '继续往前走', excludeTurnIds: ['turn-5'] }), false);
+  assert.equal(shouldRunMemoryRecall(shortMemory, { userMessage: '她当时的原话是什么', excludeTurnIds: ['turn-5'] }), true);
+
+  const longArchive = Array.from({ length: 12 }, (_, i) => ({
+    turnId: `turn-${i + 1}`, round: i + 1, revision: `r${i + 1}`,
+    index: { title: `标题${i + 1}`, summary: `摘要${i + 1}` }
+  }));
+  const firstGroup = longArchive.slice(0, 10);
+  const longMemory = {
+    archive: longArchive,
+    longTermSummaries: [{
+      id: longTermGroupId(firstGroup),
+      content: '前十轮摘要',
+      sourceTurnIds: firstGroup.map((e) => e.turnId),
+      sourceRevisions: Object.fromEntries(firstGroup.map((e) => [e.turnId, e.revision])),
+      stale: false
+    }]
+  };
+  assert.equal(shouldRunMemoryRecall(longMemory, { userMessage: '继续往前走', excludeTurnIds: ['turn-12'] }), true);
+});
+
+test('角色卡按需附带：kinks 留空（未成年/无特殊XP）不再导致每轮重复附带整份角色卡', () => {
+  const noKinks = {
+    name: '小满', core: '高三学生，备考压力大', appearance: '162cm', kinks: '', outerAura: '开朗', innerAura: '敏感'
+  };
+  const state = { ...emptyMemoryState(), characters: [noKinks] };
+  const round = makeRound(2, '小满早安', '小满笑着挥手');
+  const character = { background: '背景', characterModules: ['小满的角色设定'] };
+  assert.equal(characterCardForMemoryRound(character, state, round), '');
+});
+
+test('召回载荷瘦身：消歧状态省略外貌/性癖/气质，最近回复剥离思考块/菜单/插图并控长', () => {
+  const state = emptyMemoryState();
+  state.scene = '咖啡馆';
+  state.characters.push({
+    name: '林静', core: '咖啡店长', presence: '在场', relation: '朋友',
+    appearance: '168cm D杯', kinks: '支配', outerAura: '端庄', innerAura: '敏感'
+  });
+  const compact = formatMemoryStateForRecall(state);
+  assert.ok(compact.includes('场景：咖啡馆'));
+  assert.ok(compact.includes('核心=咖啡店长'));
+  assert.ok(!compact.includes('168cm'));
+  assert.ok(!compact.includes('支配'));
+  assert.ok(!compact.includes('端庄'));
+
+  const cleaned = cleanRecentAssistantForRecall('<思考>内部推理</思考>正文内容\n\n>### 行动选项\n1. A\n>### 🖼️插图\n![a](seedream://)', 100);
+  assert.equal(cleaned, '正文内容');
+  const longText = cleanRecentAssistantForRecall('甲'.repeat(500) + '乙'.repeat(500), 200);
+  assert.ok(longText.includes('…（中略）…'));
+  assert.ok(longText.length < 220);
+});
+
+test('Anthropic 双断点缓存：长期记忆前置时切为静态缓存 + 长期记忆缓存 + 每轮动态不缓存三段', () => {
+  const staticPart = '角色卡设定\n\n【输出格式要求】...';
+  const longTermPart = '\n\n【长期记忆】\n第1-10轮摘要';
+  const dynamicPart = '\n\n【当前状态账本】\n场景：咖啡店\n\n【连续剧情脉络】\n第11轮';
+  const blocks = splitSystemForCache(staticPart + longTermPart + dynamicPart);
+  assert.equal(blocks.length, 3);
+  assert.equal(blocks[0].text, staticPart);
+  assert.deepEqual(blocks[0].cache_control, { type: 'ephemeral' });
+  assert.equal(blocks[1].text, longTermPart);
+  assert.deepEqual(blocks[1].cache_control, { type: 'ephemeral' });
+  assert.equal(blocks[2].text, dynamicPart);
+  assert.equal(blocks[2].cache_control, undefined);
+});
+
+test('休眠 NPC 动态分级折叠：超 6 人时折叠远期不在场人物，提及时瞬间全字段唤醒', () => {
+  const archive = Array.from({ length: 15 }, (_, i) => ({ turnId: `turn-${i + 1}`, round: i + 1 }));
+  const makeChar = (name, extra = {}) => ({
+    name,
+    core: `${name}的核心`,
+    presence: '不在场',
+    offscreen: `${name}正在外地出差`,
+    relation: '朋友',
+    stage: '熟悉',
+    appearance: `${name}外貌168cm`,
+    kinks: `${name}特殊XP`,
+    outerAura: `${name}外在气质`,
+    innerAura: `${name}内在气质`,
+    boundaries: `${name}亲密边界`,
+    sourceTurn: 'turn-1',
+    ...extra
+  });
+  const characters = [
+    makeChar('在场角色', { presence: '在场', sourceTurn: 'turn-1' }),
+    makeChar('近期角色', { presence: '不在场', sourceTurn: 'turn-14' }),
+    makeChar('远期角色A'),
+    makeChar('远期角色B'),
+    makeChar('远期角色C'),
+    makeChar('远期角色D'),
+    makeChar('远期角色E')
+  ];
+  const memory = { archive, state: { ...emptyMemoryState(), characters } };
+
+  const folded = formatCurrentMemoryState(memory, { mentionText: '今天天气不错' });
+  // 在场 & 近期活跃：全字段保留
+  assert.ok(folded.includes('在场角色外貌168cm'));
+  assert.ok(folded.includes('近期角色外貌168cm'));
+  // 远期不在场且未提及：折叠为锚点+关系+场外，省略外貌/性癖/边界
+  assert.ok(folded.includes('人物【远期角色A】一句话核心=远期角色A的核心'));
+  assert.ok(folded.includes('最近场外状态=远期角色A正在外地出差'));
+  assert.ok(!folded.includes('远期角色A外貌168cm'));
+  assert.ok(!folded.includes('远期角色A特殊XP'));
+  assert.ok(!folded.includes('远期角色A亲密边界'));
+
+  // 一旦本轮提到远期角色A：立刻全字段唤醒
+  const woken = formatCurrentMemoryState(memory, { mentionText: '我突然想起了远期角色A' });
+  assert.ok(woken.includes('远期角色A外貌168cm'));
+  assert.ok(woken.includes('远期角色A特殊XP'));
+  assert.ok(!woken.includes('远期角色B外貌168cm'));
 });

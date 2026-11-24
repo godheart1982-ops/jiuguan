@@ -9,7 +9,7 @@ import { setRequestSessionId } from '../../services/api-headers.js';
 import { resolveMemoryApi } from '../../services/api-memory.js';
 import {
   selectMemoryRecalls, catchUpMemoryArchive, getMemoryRawWindowSize,
-  RECENT_RAW_TURNS, turnIdOf
+  shouldRunMemoryRecall, RECENT_RAW_TURNS, turnIdOf
 } from '../../services/memory-engine.js';
 import { buildActionOptionContext } from '../../services/action-options.js';
 import { updateGenerationForeground } from '../../services/foreground.js';
@@ -161,8 +161,7 @@ export function createSendController(deps) {
         rawWindowOverride = getMemoryRawWindowSize(chat.memory, pastRounds);
         const excludedTurnIds = pastRounds.slice(-rawWindowOverride).map(turnIdOf);
         rawWindowTurnIds = excludedTurnIds;
-        const hasIndex = Array.isArray(chat.memory.archive) && chat.memory.archive.some((a) => a && a.index && !excludedTurnIds.includes(a.turnId));
-        if (hasIndex) {
+        if (shouldRunMemoryRecall(chat.memory, { userMessage: userMsg.content, excludeTurnIds: excludedTurnIds })) {
           try {
             showMemoryStatus('正在查找相关历史对话…', 'info');
             const latest = pastRounds[pastRounds.length - 1] || null;
@@ -194,7 +193,6 @@ export function createSendController(deps) {
         {
           webSearchRef: options.webSearchRef || '',
           metaCommand: isMeta,
-          plot: chat.plot || null,
           authorNote: chat.authorNote || null,
           recalledTurns,
           rawWindowTurnIds,

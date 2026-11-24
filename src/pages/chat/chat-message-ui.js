@@ -1,5 +1,5 @@
 // 消息 DOM：气泡、右键菜单、编辑、新建会话
-import { saveChat, createUUID, toPlotPreset } from '../../services/storage.js';
+import { saveChat, createUUID } from '../../services/storage.js';
 import { countTokens } from '../../utils/tokenizer.js';
 import { escapeHtml, extractThinkingForDisplay } from './chat-utils.js';
 import { renderMarkdown, renderAssistantDisplay } from './chat-markdown.js';
@@ -31,14 +31,6 @@ export async function createNewChat(character) {
       timestamp: now,
       round: 0
     });
-  }
-
-  // 卡级剧情线：开新局自动复制为对话副本（复用 toPlotPreset 白名单清洗；指针从 1 开始；副本可改不动卡）
-  if (character.plot && Array.isArray(character.plot.stages) && character.plot.stages.length) {
-    const preset = toPlotPreset(character.plot);
-    if (preset.stages.length) {
-      chat.plot = { ...preset, current: 1 };
-    }
   }
 
   await saveChat(chat);

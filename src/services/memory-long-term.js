@@ -190,7 +190,11 @@ ${JSON.stringify(cards)}`;
     { role: 'system', content: '你是连续剧情长期记忆整理助手。只输出合法 JSON，不输出解释。' },
     { role: 'user', content: prompt }
   ], { api, usageContext: { kind: 'memory' } });
-  return makeLongTermSummary(entries, parseJson(raw));
+  const parsed = parseJson(raw);
+  if (!parsed || typeof parsed !== 'object' || !String(parsed.content || '').trim()) {
+    throw new Error('长期记忆压缩返回格式异常，请重试');
+  }
+  return makeLongTermSummary(entries, parsed);
 }
 
 export function previousLongTermSummary(memory, groups, groupIndex) {
@@ -242,7 +246,10 @@ export async function rebuildLongTermMemory(chat, summaryId, hooks = {}) {
   if (entries.length !== LONG_TERM_GROUP_SIZE) throw new Error('来源轮次已删除或索引失效；请先在“对话索引”页重建失效索引');
   entries.sort((a, b) => (existing.sourceTurnIds || []).indexOf(String(a.turnId)) - (existing.sourceTurnIds || []).indexOf(String(b.turnId)));
   hooks.onStatus?.(`正在重建第 ${entries[0].round ?? '—'}～${entries.at(-1).round ?? '—'} 轮长期记忆…`, 'info');
-  const summary = await processLongTermMemory(entries);
+  const { groups } = partitionLongTermArchive(chat.memory);
+  const groupIndex = groups.findIndex((group) => longTermGroupId(group) === summaryId);
+  const previous = groupIndex > 0 ? previousLongTermSummary(chat.memory, groups, groupIndex) : null;
+  const summary = await processLongTermMemory(entries, { previousLongTerm: previous });
   summary.createdAt = existing.createdAt || summary.createdAt;
   chat.memory.longTermSummaries[index] = summary;
   await saveChat(chat).catch(() => {});

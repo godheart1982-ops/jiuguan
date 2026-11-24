@@ -317,15 +317,20 @@ export function trimAssistantForMemory(content) {
 
 // 记忆类调用（短期总结 / 长期整合 / 长期精简）使用的 API：优先用独立配置的「副 API（memoryApi）」，
 // 可指向另一个服务商；未配置则回退主 API。
+export const DEFAULT_MEMORY_TEMPERATURE = 0.2;
+
 export function resolveMemoryApi(api) {
   const m = api && api.memoryApi;
   if (m && m.baseUrl && m.apiKey && m.model) {
+    const hasExplicitTemp = m.temperature !== undefined && m.temperature !== null && m.temperature !== '';
     return {
       baseUrl: m.baseUrl,
       apiKey: m.apiKey,
       model: m.model,
-      temperature: (m.temperature !== undefined && m.temperature !== null) ? m.temperature : api.temperature,
-      temperatureEnabled: m.temperatureEnabled !== undefined ? m.temperatureEnabled : api.temperatureEnabled,
+      // 副 API 专做结构化抽取与召回：留空默认 0.2（不继承主 API 的高创作温度）；
+      // 且不继承主 API 的 temperatureEnabled=false（避免主 API 用 Claude 4.7 时连带禁用副 API 温度）
+      temperature: hasExplicitTemp ? Number(m.temperature) : DEFAULT_MEMORY_TEMPERATURE,
+      temperatureEnabled: m.temperatureEnabled !== undefined ? m.temperatureEnabled : true,
       maxTokens: (m.maxTokens !== undefined && m.maxTokens !== null) ? m.maxTokens : api.maxTokens,
       // 副 API 是独立服务商：只用自己的自定义请求头，不继承主 API 的（避免把会话头泄漏给别家）
       customHeaders: m.customHeaders || ''

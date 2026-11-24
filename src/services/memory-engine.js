@@ -7,7 +7,8 @@ import { resolveMemoryApi, trimAssistantForMemory, extractMemoryCorrections } fr
 import { assembleCardDescription } from './card-modules.js';
 import {
   ensureLongTermSummaries, catchUpLongTermMemories, markLongTermMemoryEdited,
-  filterLongTermSummariesForTurns, formatContinuousMemoryIndexes, getCoveredMemoryTurnIds
+  filterLongTermSummariesForTurns, formatContinuousMemoryIndexes, getCoveredMemoryTurnIds,
+  getContinuousIndexEntries
 } from './memory-long-term.js';
 
 export const RECENT_RAW_TURNS = 1;
@@ -16,6 +17,8 @@ export const MEMORY_RECALL_LIMIT = 16;
 export const RECALL_BATCH_SIZE = 200;
 export const MEMORY_RECALL_DETAIL_LIMIT = 2;
 export const MEMORY_RECALL_LOG_LIMIT = 20;
+export const CHARACTER_FOLD_THRESHOLD = 6;
+export const CHARACTER_ACTIVE_WINDOW = 10;
 
 export function emptyMemoryState() {
   return {
@@ -30,6 +33,7 @@ export function emptyMemoryState() {
 }
 
 const PROFILE_FIELDS = ['appearance', 'kinks', 'outerAura', 'innerAura'];
+const REQUIRED_PROFILE_FIELDS = ['appearance', 'outerAura', 'innerAura'];
 const SNAPSHOT_PROFILE_FIELDS = ['kinks', 'outerAura', 'innerAura'];
 
 export function syncMemoryProfiles(memory, overwrite = false) {
@@ -130,6 +134,15 @@ function cleanAssistantForArchive(content) {
     .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
     .replace(/^>###\s*🖼️插图[\s\S]*$/m, '')
     .trim();
+}
+
+/** 召回消歧用的最近一轮 AI 文本：剥离思考块/插图/行动选项，并限制长度以省 token。 */
+export function cleanRecentAssistantForRecall(content, maxLen = 1400) {
+  const cleaned = cleanAssistantForArchive(content);
+  if (cleaned.length <= maxLen) return cleaned;
+  const head = Math.floor(maxLen * 0.65);
+  const tail = maxLen - head;
+  return `${cleaned.slice(0, head)}\n…（中略）…\n${cleaned.slice(-tail)}`;
 }
 
 function clone(value) {
@@ -287,16 +300,60 @@ export function applyMemoryStatePatch(stateRaw, patch, turnId) {
   return state;
 }
 
-export function formatMemoryState(stateRaw) {
+const CHARACTER_FIELD_LABELS = {
+  core: '一句话核心',
+  presence: '在场状态',
+  offscreen: '最近场外状态',
+  appearance: '外貌身材',
+  kinks: '性癖',
+  outerAura: '外在气质',
+  innerAura: '实际内在气质',
+  relation: '关系',
+  stage: '阶段',
+  scores: '进度',
+  mood: '情绪',
+  goal: '目标',
+  agreement: '关系约定',
+  boundaries: '亲密边界',
+  knowledge: '知情',
+  plans: '个人计划'
+};
+const DORMANT_CHARACTER_FIELDS = ['core', 'presence', 'offscreen', 'relation', 'stage'];
+
+function formatCharacterLine(c, fields) {
+  const details = fields
+    .map((key) => [key, String(c[key] || '').trim()])
+    .filter(([, value]) => value)
+    .map(([key, value]) => `${CHARACTER_FIELD_LABELS[key]}=${value}`);
+  return c.name ? `人物【${c.name}】${details.join('；')}` : '';
+}
+
+function isCharacterActiveForInjection(c, recentTurnIds, mentionText) {
+  const name = String(c && c.name || '').trim();
+  if (!name) return false;
+  if (String(c.presence || '').trim() === '在场') return true;
+  if (mentionText && mentionText.includes(name)) return true;
+  if (c.sourceTurn && recentTurnIds.has(String(c.sourceTurn))) return true;
+  return false;
+}
+
+export function formatMemoryState(stateRaw, options = {}) {
   const state = normalizeState(stateRaw);
   const lines = [];
   if (state.scene.trim()) lines.push('场景：' + state.scene.trim());
+  const threshold = Number.isFinite(options.foldThreshold) ? options.foldThreshold : CHARACTER_FOLD_THRESHOLD;
+  const activeWindow = Number.isFinite(options.activeWindow) ? options.activeWindow : CHARACTER_ACTIVE_WINDOW;
+  const shouldFold = options.foldDormant === true && state.characters.length > threshold;
+  const recentTurnIds = shouldFold
+    ? new Set((Array.isArray(options.archive) ? options.archive : []).slice(-activeWindow).map((e) => String(e && e.turnId || '')).filter(Boolean))
+    : null;
+  const mentionText = shouldFold ? String(options.mentionText || '') : '';
   for (const c of state.characters) {
-    const details = CHARACTER_FIELDS
-      .map((key) => [key, String(c[key] || '').trim()])
-      .filter(([, value]) => value)
-      .map(([key, value]) => `${({ core: '一句话核心', presence: '在场状态', offscreen: '最近场外状态', appearance: '外貌身材', kinks: '性癖', outerAura: '外在气质', innerAura: '实际内在气质', relation: '关系', stage: '阶段', scores: '进度', mood: '情绪', goal: '目标', agreement: '关系约定', boundaries: '亲密边界', knowledge: '知情', plans: '个人计划' })[key]}=${value}`);
-    if (c.name) lines.push(`人物【${c.name}】${details.join('；')}`);
+    const fields = (!shouldFold || isCharacterActiveForInjection(c, recentTurnIds, mentionText))
+      ? CHARACTER_FIELDS
+      : DORMANT_CHARACTER_FIELDS;
+    const line = formatCharacterLine(c, fields);
+    if (line) lines.push(line);
   }
   const openPromises = state.promises.filter((p) => p.status !== 'done');
   if (openPromises.length) lines.push('未完成约定：' + openPromises.map((p) => `${p.text}${p.due ? `（${p.due}）` : ''}`).join('｜'));
@@ -305,9 +362,35 @@ export function formatMemoryState(stateRaw) {
   return lines.join('\n');
 }
 
-export function formatCurrentMemoryState(memory) {
+const RECALL_STATE_CHARACTER_FIELDS = ['core', 'presence', 'relation', 'stage', 'mood', 'goal'];
+
+/** 召回消歧精简状态：只保留场景、人物核心/关系/在场/情绪/目标与未完成约定/进行中事件，省略外貌/性癖/气质等大字段。 */
+export function formatMemoryStateForRecall(stateRaw) {
+  const state = normalizeState(stateRaw);
+  const lines = [];
+  if (state.scene.trim()) lines.push('场景：' + state.scene.trim());
+  for (const c of state.characters) {
+    const details = RECALL_STATE_CHARACTER_FIELDS
+      .map((key) => [key, String(c[key] || '').trim()])
+      .filter(([, value]) => value)
+      .map(([key, value]) => `${({ core: '核心', presence: '在场', relation: '关系', stage: '阶段', mood: '情绪', goal: '目标' })[key]}=${value}`);
+    if (c.name) lines.push(`人物【${c.name}】${details.join('；')}`);
+  }
+  const openPromises = state.promises.filter((p) => p.status !== 'done');
+  if (openPromises.length) lines.push('未完成约定：' + openPromises.map((p) => `${p.text}${p.due ? `（${p.due}）` : ''}`).join('｜'));
+  if (state.events.length) lines.push('进行中事件：' + state.events.map((e) => `${e.text}${e.stage ? `→${e.stage}` : ''}`).join('｜'));
+  return lines.join('\n');
+}
+
+export function formatCurrentMemoryState(memory, options = {}) {
   if (!memory || !memory.state) return '';
-  const body = formatMemoryState(memory.state);
+  const body = formatMemoryState(memory.state, {
+    foldDormant: options.foldDormant !== false,
+    archive: memory.archive,
+    mentionText: options.mentionText || '',
+    foldThreshold: options.foldThreshold,
+    activeWindow: options.activeWindow
+  });
   if (!body) return '';
   return '【当前状态账本】（记录当前有效状态；与最近一轮状态栏存在新旧差异时，以最近一轮为准。角色卡提供初始一句话核心、人格、外貌与性癖，首次补全值和明确后续变化以账本为准；一句话核心只在身份、主要矛盾或长期处境变化时更新，核心人格不得单轮骤变。人物已在场时，最近场外状态仅供衔接，不覆盖当前正文；场外旁白、性癖与内在气质均不等于主控知情）\n' + body;
 }
@@ -345,8 +428,9 @@ export function memoryStateForRound(state, round) {
 export function characterCardForMemoryRound(character, state, round) {
   const relevant = memoryStateForRound(state, round);
   const existing = Array.isArray(state && state.characters) ? state.characters : [];
+  // kinks 允许对无特殊 XP 或未成年角色留空，不能因为 kinks 为空就每轮重复附带整份角色卡
   const needsCard = !existing.length || !relevant.characters.length || relevant.characters.some(
-    (item) => !String(item.core || '').trim() || PROFILE_FIELDS.some((field) => !String(item[field] || '').trim())
+    (item) => !String(item.core || '').trim() || REQUIRED_PROFILE_FIELDS.some((field) => !String(item[field] || '').trim())
   );
   return needsCard ? assembleCardDescription(character) : '';
 }
@@ -441,6 +525,7 @@ export async function catchUpMemoryArchive(chat, character, rounds, hooks = {}) 
       corrections: extractMemoryCorrections(round.assistant.content || ''),
       characterName: character.name || '',
       characterCard: characterCardForMemoryRound(character, chat.memory.state, round),
+      lockedProfiles: chat.memory.profiles || {},
       greeting
     });
     if (existing) {
@@ -587,6 +672,21 @@ export function queryNeedsHistoricalDetail(text) {
   return /原话|逐字|原文|详细|细节|具体(?:怎么|如何|过程|互动|说了|说了什么)|当时(?:说|回答|回应|怎么互动)|说了什么|怎么说的/.test(value);
 }
 
+/**
+ * 判断本轮发送前是否真的需要阻塞调用副 API 召回：
+ * 若所有候选索引卡均已全量常驻在「连续剧情脉络」中（例如尚未生成长期压缩的前 10 轮），
+ * 且本轮输入未要求核验原话/逐字细节，则跳过召回以省去无意义的延迟与 token。
+ */
+export function shouldRunMemoryRecall(memory, query = {}) {
+  if (!memory || !Array.isArray(memory.archive)) return false;
+  const excluded = new Set(query.excludeTurnIds || []);
+  const candidates = selectorCards(memory, excluded);
+  if (!candidates.length) return false;
+  if (queryNeedsHistoricalDetail(query.userMessage)) return true;
+  const continuousIds = new Set(getContinuousIndexEntries(memory).map((entry) => String(entry.turnId)));
+  return candidates.some((entry) => !continuousIds.has(String(entry.turnId)));
+}
+
 async function requestRecallBatch(api, cards, query, phase = 'coarse') {
   const finalPhase = phase === 'final';
   const prompt = `请从索引卡中找出本轮真正需要的历史记忆。允许一个也不选，禁止为凑数而选。
@@ -599,7 +699,7 @@ turnId 必须照抄。scope 含义：none=当前状态足够或无历史需要�
 2. 人名、地点、关系、当前状态只用于定位与消歧，不能单独构成召回理由。纯人名最多选一条 medium，也可为空。
 3. 普通续写默认少选或不选；specific 围绕一件事，不多带其他经历；review 才选择多个关键节点。
 4. 同一事件的多轮过程不得全选：普通问题选最直接一轮；长线回顾选起点/转折/结果/最新进展。
-5. 最近一轮已直接携带，不要选排除项。常驻覆盖ID对应的轮次已由连续索引或长期摘要提供：normal 不要重复选择；specific/review 因长期摘要可能漏细节，仍可选择最相关轮次；needsDetail 时也可用于原文核验。需要前因后果时才设 includeContext=true。
+5. 最近一轮已直接携带，不要选排除项。索引卡中带 "covered":true 的轮次已由连续索引或长期摘要常驻提供：normal 不要重复选择；specific/review 因长期摘要可能漏细节，仍可选择最相关轮次；needsDetail 时也可用于原文核验。需要前因后果时才设 includeContext=true。
 6. 粗筛时先结合行动选项、当前状态与最近对话，把“她/那件事/还记得吗”等模糊说法改写为 rewrittenQuery；只能明确已有指代，禁止添加未发生的事实。涉及“昨天/前天/上周/上次”等相对时间时，必须按当前剧情日期换算成绝对日期或日期范围写进 rewrittenQuery，只使用索引 sceneTime 消歧，禁止参考现实时间或 turnTimestamp。specific/review 在多个候选需要辨析或组织关键节点时设 needsRerank=true；只有一个明确候选可设 false。normal 仅在指代不清楚或候选相似时设为 true。
 7. ${finalPhase ? '本次是复选：依据已明确检索意图严格精选，不得选择候选卡之外的 turnId。' : '本次是粗筛：保留真正相关的候选，但不要为凑数放宽到纯人名或宽泛话题重合。'}
 
@@ -616,14 +716,11 @@ ${String(query.actionContext || '自由输入或无可用选项')}
 ${String(query.currentState && query.currentState.scene || '未记录')}
 
 【当前状态（仅用于消歧）】
-${formatMemoryState(query.currentState) || '无'}
+${formatMemoryStateForRecall(query.currentState) || '无'}
 
 【最近一轮对话】
 用户：${String(query.recentUser || '')}
-AI：${String(query.recentAssistant || '')}
-
-【常驻覆盖 turnId（normal 避免重复；specific/review 可选）】
-${JSON.stringify(query.coveredTurnIds || [])}
+AI：${cleanRecentAssistantForRecall(query.recentAssistant || '')}
 
 【本批索引卡】
 ${JSON.stringify(cards)}`;
@@ -706,8 +803,13 @@ export async function selectMemoryRecalls(memory, query = {}) {
   if (!candidates.length) return { selections: [], recalls: [] };
   const config = await getConfig();
   const api = memoryApiOrThrow(config);
-  const cards = candidates.map((entry) => ({ turnId: entry.turnId, round: entry.round, ...entry.index }));
-  const result = await runRecallPipeline(cards, { ...query, coveredTurnIds: [...coveredTurnIds] },
+  const cards = candidates.map((entry) => ({
+    turnId: entry.turnId,
+    round: entry.round,
+    ...entry.index,
+    ...(coveredTurnIds.has(String(entry.turnId)) ? { covered: true } : {})
+  }));
+  const result = await runRecallPipeline(cards, query,
     (batch, batchQuery, phase) => requestRecallBatch(api, batch, batchQuery, phase));
   const rows = filterCoveredRecallRows(result.rows, result.scope, coveredTurnIds, result.needsDetail);
   const recalls = finalizeRecallSelections(memory, rows, result.scope, { allowDetail: result.needsDetail });

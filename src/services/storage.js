@@ -576,42 +576,6 @@ export async function deleteApiProfile(name) {
   await saveConfig(config);
 }
 
-// ---------- 剧情线库（命名预设，全局共享，对话里读取为副本） ----------
-
-// 方案白名单：只保留 mode + stages（指针是运行态，不入库——读取时副本指针恒从 1 开始）
-export function toPlotPreset(plot) {
-  const stages = (Array.isArray(plot && plot.stages) ? plot.stages : [])
-    .map((s) => ({
-      title: String((s && s.title) || '').trim(),
-      content: String((s && s.content) || '').trim(),
-      condition: String((s && s.condition) || '').trim(),
-      branches: String((s && s.branches) || '').trim()
-    }))
-    .filter((s) => s.title || s.content);
-  return {
-    mode: (plot && plot.mode) === 'hard' ? 'hard' : 'soft',
-    stages
-  };
-}
-
-export async function getPlotPresets() {
-  const config = await getConfig();
-  return config.plotPresets || {};
-}
-
-export async function savePlotPreset(name, plot) {
-  const config = await getConfig();
-  if (!config.plotPresets) config.plotPresets = {};
-  config.plotPresets[name] = toPlotPreset(plot);
-  await saveConfig(config);
-}
-
-export async function deletePlotPreset(name) {
-  const config = await getConfig();
-  if (config.plotPresets) delete config.plotPresets[name];
-  await saveConfig(config);
-}
-
 // ---------- 世界书库（独立文件，可被角色绑定） ----------
 
 async function ensureDefaultAdultWorldBook() {

@@ -218,7 +218,7 @@ export async function renderApiSettingsModal() {
             <div class="form-row">
               <div class="form-group">
                 <label class="form-label">Temperature</label>
-                <input class="form-input" id="setting-sub-temperature" type="number" step="0.1" min="0" max="2" value="${(api.memoryApi && api.memoryApi.temperature !== undefined && api.memoryApi.temperature !== null) ? api.memoryApi.temperature : ''}" placeholder="留空跟随主 API">
+                <input class="form-input" id="setting-sub-temperature" type="number" step="0.1" min="0" max="2" value="${(api.memoryApi && api.memoryApi.temperature !== undefined && api.memoryApi.temperature !== null) ? api.memoryApi.temperature : ''}" placeholder="留空默认 0.2（推荐低温度）">
               </div>
               <div class="form-group">
                 <label class="form-label">Max Tokens</label>

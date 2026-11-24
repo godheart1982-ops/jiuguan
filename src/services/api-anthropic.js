@@ -7,34 +7,75 @@ import { buildCustomHeaders } from './api-headers.js';
 import { recordUsage } from './token-stats.js';
 import { foldExtraSystemIntoDialog } from './author-note.js';
 
+const LONG_TERM_MARKER = '\n\n【长期记忆】';
+const PER_TURN_DYNAMIC_MARKERS = [
+  '\n\n【当前状态账本】',
+  '\n\n【连续剧情脉络】',
+  '\n\n【短期记忆】',
+  '\n\n【召回的历史记忆】',
+  '\n\n【对话补充设定】',
+  '\n\n【插图种子档案】'
+];
+
+function earliestIndex(text, markers, fromIndex = 0) {
+  let best = -1;
+  for (const marker of markers) {
+    const idx = text.indexOf(marker, fromIndex);
+    if (idx !== -1 && (best === -1 || idx < best)) {
+      best = idx;
+    }
+  }
+  return best;
+}
+
+/**
+ * 切分 Anthropic system 文本：
+ * - 断点 1：静态前缀（角色卡/世界书/格式/规则）永久缓存；
+ * - 断点 2（若紧跟【长期记忆】）：每 10 轮才更新一次的长期记忆单独缓存（10 轮命中 9 轮）；
+ * - 尾段：每轮变化的动态记忆（当前状态账本/连续脉络/召回等）不缓存。
+ */
+export function splitSystemForCache(text) {
+  const raw = String(text || '');
+  const longTermStart = raw.indexOf(LONG_TERM_MARKER);
+  const dynamicStart = earliestIndex(raw, PER_TURN_DYNAMIC_MARKERS);
+
+  // 无长期记忆、或长期记忆排在每轮动态块之后：退回双块（静态缓存 + 动态不缓存）
+  if (longTermStart === -1 || (dynamicStart !== -1 && dynamicStart < longTermStart)) {
+    const splitAt = (longTermStart === -1)
+      ? dynamicStart
+      : (dynamicStart === -1 ? longTermStart : Math.min(longTermStart, dynamicStart));
+    if (splitAt === -1) {
+      return [{ type: 'text', text: raw, cache_control: { type: 'ephemeral' } }];
+    }
+    if (splitAt === 0) {
+      return [{ type: 'text', text: raw }];
+    }
+    return [
+      { type: 'text', text: raw.slice(0, splitAt), cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: raw.slice(splitAt) }
+    ];
+  }
+
+  // 长期记忆紧接静态前缀之后：最多三块（静态缓存 + 长期记忆缓存 + 每轮动态不缓存）
+  const afterLongTerm = earliestIndex(raw, PER_TURN_DYNAMIC_MARKERS, longTermStart + LONG_TERM_MARKER.length);
+  const blocks = [];
+  if (longTermStart > 0) {
+    blocks.push({ type: 'text', text: raw.slice(0, longTermStart), cache_control: { type: 'ephemeral' } });
+  }
+  if (afterLongTerm === -1) {
+    blocks.push({ type: 'text', text: raw.slice(longTermStart), cache_control: { type: 'ephemeral' } });
+  } else {
+    blocks.push({ type: 'text', text: raw.slice(longTermStart, afterLongTerm), cache_control: { type: 'ephemeral' } });
+    blocks.push({ type: 'text', text: raw.slice(afterLongTerm) });
+  }
+  return blocks;
+}
+
 function buildAnthropicBody(messages, api, stream) {
   const systemMsg = messages.find(m => m.role === 'system');
   const dialogMsgs = foldExtraSystemIntoDialog(messages);
 
-  // 断点1：静态部分（角色描述+规则+格式）放 cache_control，动态记忆不缓存
-  // 记忆随对话推进持续更新，若混入断点1则哈希每轮都变，导致只创建从不命中
-  // 记忆块固定以 \n\n【长期记忆】 或 \n\n【短期记忆】 开头，且总在系统消息末尾
-  let system;
-  if (systemMsg) {
-    const text = systemMsg.content;
-    const a = text.indexOf('\n\n【长期记忆】');
-    const b = text.indexOf('\n\n【短期记忆】');
-    const memStart = (a === -1 && b === -1) ? -1
-      : (a === -1) ? b
-      : (b === -1) ? a
-      : Math.min(a, b);
-
-    if (memStart === -1) {
-      // 无记忆：全部静态，单块缓存
-      system = [{ type: 'text', text, cache_control: { type: 'ephemeral' } }];
-    } else {
-      // 静态部分缓存 + 动态记忆不缓存（两块）
-      system = [
-        { type: 'text', text: text.slice(0, memStart), cache_control: { type: 'ephemeral' } },
-        { type: 'text', text: text.slice(memStart) }
-      ];
-    }
-  }
+  const system = systemMsg ? splitSystemForCache(systemMsg.content) : undefined;
 
   // 断点2已移除：倒数第二条 user 的位置每轮后移一格，
   // 每轮都新建缓存但从不命中，徒耗断点配额，无实际收益
