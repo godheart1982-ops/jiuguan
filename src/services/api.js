@@ -128,7 +128,7 @@ export function sendChatStream(messages, callbacks, usageContext = {}) {
       cb.onError('读取 API 配置失败：' + (e.message || String(e)));
       return;
     }
-    const api = config.api || {};
+    const api = (usageContext && usageContext.api) || config.api || {};
 
     if (!api.baseUrl || !api.apiKey || !api.model) {
       cb.onError('API 配置不完整，请先在侧边栏设置 API 信息');

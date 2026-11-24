@@ -1,5 +1,6 @@
 import { renderHome } from './pages/home.js';
 import { renderCharacterEdit } from './pages/character-edit.js';
+import { renderCardStudio } from './pages/card-studio.js';
 import { renderChat } from './pages/chat.js';
 import { renderWorldBookManager } from './pages/world-book-manager.js';
 import { renderPromptLibrary } from './pages/prompt-library.js';
@@ -182,6 +183,9 @@ function render() {
     case 'edit':
       renderCharacterEdit(mainContent, state.currentCharacterId);
       break;
+    case 'studio':
+      renderCardStudio(mainContent);
+      break;
     case 'chat':
       renderChat(mainContent, state.currentCharacterId, state.currentChatId);
       break;
@@ -199,6 +203,10 @@ function render() {
 // 侧边栏按钮事件
 document.getElementById('btn-new-character').addEventListener('click', () => {
   navigate('edit', { characterId: null });
+});
+
+document.getElementById('btn-card-studio').addEventListener('click', () => {
+  navigate('studio');
 });
 
 document.getElementById('btn-worldbooks').addEventListener('click', () => {
