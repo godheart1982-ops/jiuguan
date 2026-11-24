@@ -74,8 +74,8 @@ npm run build:android:apk      # 仅打包 APK
 也可手动改 `android/app/build.gradle`：
 
 ```gradle
-versionCode 205        // 整数，每版 +1（覆盖安装时系统据此判断新旧）
-versionName "2.1.151"   // 显示给用户的版本号
+versionCode 206        // 整数，每版 +1（覆盖安装时系统据此判断新旧）
+versionName "2.1.152"   // 显示给用户的版本号
 ```
 
 ### 数据存储
@@ -87,13 +87,13 @@ Android 版本使用 Capacitor Filesystem 插件，数据存储在应用私有�
 每次 APK 打包并推送后，同时创建对应 Release 并上传 APK，避免只保存代码而丢失二进制产物。示例（替换版本号）：
 
 ```bash
-gh release create v2.1.151 \
-  "android/app/build/outputs/apk/debug/app-debug.apk#jiuguan-2.1.151-debug.apk" \
+gh release create v2.1.152 \
+  "android/app/build/outputs/apk/debug/app-debug.apk#jiuguan-2.1.152-debug.apk" \
   --target main \
-  --title "Android 2.1.151" \
-  --notes "versionCode 205"
+  --title "Android 2.1.152" \
+  --notes "versionCode 206"
 
-gh release view v2.1.151 --json tagName,url,assets
+gh release view v2.1.152 --json tagName,url,assets
 ```
 
 上传后用第二条命令确认附件状态为 `uploaded`。历史 Release 可从仓库 Releases 页面下载。

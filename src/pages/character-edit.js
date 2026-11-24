@@ -5,6 +5,7 @@ import { attachCharCounter } from '../utils/counter.js';
 import { openBigTextEditor } from '../utils/big-editor.js';
 import { normalizeWorldBookSettings, createEmptyWorldBookEntry } from '../services/world-book.js';
 import { normalizeSubCharacters, getCharacterModules } from '../services/card-modules.js';
+import { DEFAULT_ADULT_WORLD_BOOK_ID } from '../services/default-world-books.js';
 
 export async function renderCharacterEdit(container, characterId) {
   container.innerHTML = '';
@@ -28,12 +29,12 @@ export async function renderCharacterEdit(container, characterId) {
     enableRandomNarrative: true,
     rawWindowTurns: 3,
     worldBook: {
-      enabled: false,
+      enabled: true,
       scanDepth: 4,
       caseSensitive: false,
       maxRecursion: 3,
       ignoreStatusBar: true,
-      boundBookIds: [],
+      boundBookIds: [DEFAULT_ADULT_WORLD_BOOK_ID],
       entries: []
     },
     creator: '',

@@ -4,6 +4,7 @@
  */
 
 import { migrateConfig, migrateChat } from './migrations.js';
+import { DEFAULT_ADULT_WORLD_BOOK_ID, freshDefaultAdultWorldBook } from './default-world-books.js';
 
 let api = null;
 
@@ -613,9 +614,22 @@ export async function deletePlotPreset(name) {
 
 // ---------- 世界书库（独立文件，可被角色绑定） ----------
 
+async function ensureDefaultAdultWorldBook() {
+  const path = `${PATHS.worldbooks}/${DEFAULT_ADULT_WORLD_BOOK_ID}.json`;
+  const existing = await readJson(path);
+  if (existing) return existing;
+  const book = freshDefaultAdultWorldBook();
+  const now = new Date().toISOString();
+  book.createdAt = now;
+  book.updatedAt = now;
+  await writeJson(path, book);
+  return book;
+}
+
 export async function listWorldBooks() {
   const backend = await initBackend();
   await backend.fs.ensureDir(PATHS.worldbooks).catch(() => {});
+  await ensureDefaultAdultWorldBook();
   const entries = await backend.fs.listFiles(PATHS.worldbooks).catch(() => []);
   const jsonFiles = (entries || []).filter((e) => e.isFile && e.name.endsWith('.json'));
   const books = [];
@@ -628,6 +642,7 @@ export async function listWorldBooks() {
 
 export async function getWorldBook(id) {
   if (!id) return null;
+  if (id === DEFAULT_ADULT_WORLD_BOOK_ID) await ensureDefaultAdultWorldBook();
   return await readJson(`${PATHS.worldbooks}/${id}.json`);
 }
 

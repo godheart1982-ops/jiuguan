@@ -76,7 +76,7 @@ export async function renderWorldBookManager(container, options = {}) {
           <div class="wb-book-card-actions">
             <button type="button" class="btn btn-ghost btn-small btn-wb-open" data-id="${escapeHtml(b.id)}">编辑</button>
             <button type="button" class="btn btn-ghost btn-small btn-wb-rename" data-id="${escapeHtml(b.id)}">重命名</button>
-            <button type="button" class="btn btn-danger btn-small btn-wb-del" data-id="${escapeHtml(b.id)}">删除</button>
+            ${b.builtIn ? '<span class="form-hint">内置</span>' : `<button type="button" class="btn btn-danger btn-small btn-wb-del" data-id="${escapeHtml(b.id)}">删除</button>`}
           </div>
         </div>`;
     }).join('');

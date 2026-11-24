@@ -23,6 +23,7 @@
  */
 
 import { getWorldBook } from './storage.js';
+import { DEFAULT_ADULT_WORLD_BOOK_ID } from './default-world-books.js';
 
 export const WORLD_BOOK_MAX_INJECT = 10;
 export const WORLD_BOOK_DEFAULT_RECURSION = 3;
@@ -53,12 +54,13 @@ export function normalizeWorldBookSettings(raw) {
   const wb = raw && typeof raw === 'object' ? raw : {};
   const depth = parseInt(wb.scanDepth, 10);
   const rec = parseInt(wb.maxRecursion, 10);
+  // 未配置过世界书的卡默认加载内置成人协议；显式 enabled:false 或解绑空数组均尊重用户选择。
   const bound = Array.isArray(wb.boundBookIds)
     ? wb.boundBookIds.map((id) => String(id || '').trim()).filter(Boolean)
-    : [];
+    : [DEFAULT_ADULT_WORLD_BOOK_ID];
   const entries = Array.isArray(wb.entries) ? wb.entries.map(normalizeEntry).filter(Boolean) : [];
   return {
-    enabled: wb.enabled === true,
+    enabled: wb.enabled === undefined ? true : wb.enabled === true,
     scanDepth: Number.isFinite(depth) ? Math.max(0, Math.min(50, depth)) : 4,
     caseSensitive: wb.caseSensitive === true,
     maxRecursion: Number.isFinite(rec)
