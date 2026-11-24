@@ -165,7 +165,7 @@ app.js
 | 本文档 | 完成 | 2026-07-29 |
 | Phase A 清理 | 完成：已删 `src/pages/chat.js.bak` | 2026-07-29 |
 | Phase B settings | 完成：拆为 `settings/api-settings.js` + `other-settings.js` + `settings-shared.js`，`pages/settings.js` 仅 re-export | 2026-07-29 |
-| Phase C image-gen | 待做 | |
+| Phase C image-gen | 完成：拆为 `image-gen/{providers,anchors,outfit-library,compose,index}.js`，`services/image-gen.js` 仅 re-export | 2026-11-24 |
 | Phase D chat | 完成：D1–D4 列表/记忆 + D5 发送流拆至 `chat/chat-send.js`，`chat.js` 余 ~540 行 | 2026-07-31 |
 
 ### Phase B 结果目录

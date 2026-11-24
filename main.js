@@ -88,19 +88,33 @@ ipcMain.handle('fs:readFileBuffer', async (event, relativePath) => {
   return buffer.toString('base64');
 });
 
+async function atomicWriteFile(fullPath, data, encoding) {
+  ensureDir(path.dirname(fullPath));
+  const tmpPath = `${fullPath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+  try {
+    if (encoding) {
+      await fs.promises.writeFile(tmpPath, data, encoding);
+    } else {
+      await fs.promises.writeFile(tmpPath, data);
+    }
+    await fs.promises.rename(tmpPath, fullPath);
+  } catch (err) {
+    await fs.promises.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+}
+
 ipcMain.handle('fs:writeFile', async (event, relativePath, content) => {
   const fullPath = path.join(dataDir, relativePath);
   if (!fullPath.startsWith(dataDir)) throw new Error('Path outside data dir');
-  ensureDir(path.dirname(fullPath));
-  await fs.promises.writeFile(fullPath, content, 'utf-8');
+  await atomicWriteFile(fullPath, content, 'utf-8');
   return true;
 });
 
 ipcMain.handle('fs:writeFileBuffer', async (event, relativePath, base64Content) => {
   const fullPath = path.join(dataDir, relativePath);
   if (!fullPath.startsWith(dataDir)) throw new Error('Path outside data dir');
-  ensureDir(path.dirname(fullPath));
-  await fs.promises.writeFile(fullPath, Buffer.from(base64Content, 'base64'));
+  await atomicWriteFile(fullPath, Buffer.from(base64Content, 'base64'));
   return true;
 });
 

@@ -169,7 +169,7 @@ const CONFIG_STEPS = [
     name: 'ui.theme 默认值',
     migrate(config) {
       if (!config.ui || typeof config.ui !== 'object') config.ui = { fontSize: 14 };
-      const validThemes = new Set(['tavern', 'charcoal', 'parchment']);
+      const validThemes = new Set(['system', 'tavern', 'charcoal', 'parchment']);
       if (!validThemes.has(config.ui.theme)) {
         config.ui.theme = 'tavern';
       }

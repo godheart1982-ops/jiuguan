@@ -74,6 +74,7 @@ test('migrateConfig: 已有 memoryApi 不被 memoryModel 覆盖', () => {
 test('migrateConfig: 老配置缺省或非法 theme 回退为 tavern，合法 theme 保留', () => {
   assert.equal(migrateConfig({ ui: { fontSize: 16 } }).ui.theme, 'tavern');
   assert.equal(migrateConfig({ ui: { fontSize: 16, theme: 'unknown' } }).ui.theme, 'tavern');
+  assert.equal(migrateConfig({ ui: { fontSize: 16, theme: 'system' } }).ui.theme, 'system');
   assert.equal(migrateConfig({ ui: { fontSize: 16, theme: 'charcoal' } }).ui.theme, 'charcoal');
   assert.equal(migrateConfig({ ui: { fontSize: 16, theme: 'parchment' } }).ui.theme, 'parchment');
 });

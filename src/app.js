@@ -3,7 +3,7 @@ import { renderCharacterEdit } from './pages/character-edit.js';
 import { renderChat } from './pages/chat.js';
 import { renderWorldBookManager } from './pages/world-book-manager.js';
 import { renderPromptLibrary } from './pages/prompt-library.js';
-import { renderApiSettingsModal, renderOtherSettingsModal, renderImageSettingsModal, applyFontSize, applyTheme } from './pages/settings.js';
+import { renderApiSettingsModal, renderUiSettingsModal, renderOtherSettingsModal, renderImageSettingsModal, applyFontSize, applyTheme } from './pages/settings.js';
 import { renderTokenStatsModal } from './pages/token-stats.js';
 import { listCharacters, getAvatarDataUrl, getConfig, saveConfig } from './services/storage.js';
 import { requestNotificationPermission, startGenerationForeground } from './services/foreground.js';
@@ -228,6 +228,16 @@ document.getElementById('btn-settings').addEventListener('click', async () => {
     await renderApiSettingsModal();
   } catch (error) {
     alert('打开设置失败：' + (error && error.message ? error.message : String(error)));
+  } finally {
+    closeMobileSidebar();
+  }
+});
+
+document.getElementById('btn-ui-settings').addEventListener('click', async () => {
+  try {
+    await renderUiSettingsModal();
+  } catch (error) {
+    alert('打开界面设置失败：' + (error && error.message ? error.message : String(error)));
   } finally {
     closeMobileSidebar();
   }

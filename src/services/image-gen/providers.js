@@ -1,0 +1,522 @@
+/**
+ * 付费生图服务：火山方舟 Seedream / Google Gemini / xAI Grok Imagine
+ *
+ * Seedream：POST {baseUrl}/images/generations，Bearer 认证，data[0].b64_json 返回
+ * 万相（阿里百炼）：POST {host}/api/v1/services/aigc/multimodal-generation/generation（DashScope 原生，
+ *          Token Plan 网关同构；output.choices[*].message.content[*].image 取临时 URL 转存）
+ * Grok   ：POST {baseUrl}/images/generations，Bearer 认证（OpenAI 兼容格式），
+ *          data[0].b64_json 返回；官方 imgen.x.ai 的 url 会过期，b64_json 优先
+ * Gemini ：POST {baseUrl}/v1beta/models/{model}:generateContent，
+ *          key 同时放 x-goog-api-key 请求头与 ?key= 查询参数（部分中转站只认其一），
+ *          图片在 candidates[].content.parts[].inlineData.data（base64），
+ *          安全拦截表现为 promptFeedback.blockReason / finishReason=SAFETY / 无图片候选
+ *
+ * 提示词流水线分叉：
+ *   严格版（Seedream / Gemini）——方案 A 纯机械：
+ *     外貌锚点 + 衣着模板库随机一行 + 可选镜头词 → 硬过滤 → 生成
+ *     不写表情/场景/剧情姿态；不 compose、不 sanitize；被拒同装重试，末次 L2 家居服
+ *   Grok / 手动网页版——副 API 管线：
+ *     回复正文 → compose 总结 → sanitize 预审 → 生成
+ *     → 被拒：L1 改写重试 → 再拒：L2 机械降级纯肖像
+ */
+
+// 付费/本地服务商判断：seedream/wanx/grok/gemini/manual/grokweb 都走"AI 空标记 + 本地出图"模式
+//（manual = 手动网页版：App 只出提示词，用户自行到网页版生图后选图插入；
+// grokweb = 局域网自托管反代：grok.com 网页账号出的图，走 chat/completions 聊天格式）
+export function isPaidImageProvider(provider) {
+  return provider === 'seedream' || provider === 'wanx' || provider === 'grok' || provider === 'gemini' || provider === 'manual' || provider === 'grokweb';
+}
+
+// 严格版机械生图：Seedream / 万相 / Gemini（无 compose，单人 only）
+export function isStrictMechanicalProvider(provider) {
+  return provider === 'seedream' || provider === 'wanx' || provider === 'gemini';
+}
+
+// 服务商显示名（加载占位/通知栏文案用）
+export function imageProviderDisplayName(provider) {
+  if (provider === 'wanx') return '万相生图';
+  if (provider === 'grok') return 'Grok 生图';
+  if (provider === 'gemini') return 'Gemini 生图';
+  if (provider === 'manual') return '手动网页版';
+  if (provider === 'grokweb') return 'Grok 网页反代';
+  return '火山生图';
+}
+
+/**
+ * 调用 seedream 生成一张图，返回 data:image/...;base64,... 形式的 data URL
+ * @param {Object} opts
+ * @param {string} opts.apiKey  Agent Plan 专属 Key / 方舟 API Key
+ * @param {string} opts.baseUrl 例如 https://ark.cn-beijing.volces.com/api/plan/v3
+ * @param {string} opts.model   例如 doubao-seedream-5.0-lite
+ * @param {string} opts.size    档位（2K/3K/4K）或像素值（如 1664x2496）
+ * @param {string} opts.prompt  提示词（中文原生支持，建议 ≤300 汉字）
+ */
+export async function generateSeedreamImage({ apiKey, baseUrl, model, size, prompt }) {
+  if (!apiKey) throw new Error('未配置 Seedream API Key（在其他设置 → 插图功能中填写）');
+  if (!prompt || !prompt.trim()) throw new Error('提示词为空');
+
+  const url = `${(baseUrl || '').replace(/\/+$/, '')}/images/generations`;
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: model || 'doubao-seedream-5.0-lite',
+        prompt: prompt.trim(),
+        size: size || '2K',
+        response_format: 'b64_json',
+        output_format: 'jpeg',
+        watermark: false
+      })
+    });
+  } catch (e) {
+    throw new Error(`网络请求失败：${e.message || e}`);
+  }
+
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        detail = json.error?.message || json.message || text;
+      } catch (e2) {
+        detail = text;
+      }
+    } catch (e3) {
+      detail = '无法读取错误响应';
+    }
+    throw new Error(`生图 API 请求失败 (${response.status})：${detail}`);
+  }
+
+  const data = await response.json();
+  const b64 = data?.data?.[0]?.b64_json;
+  if (!b64) throw new Error('生图 API 未返回图片数据');
+  return `data:image/jpeg;base64,${b64}`;
+}
+
+// 把远程图片 URL 拉下来转成 data URL（临时图床链接会过期，不能直接存）
+async function fetchUrlAsDataUrl(imgUrl) {
+  const imgResp = await fetch(imgUrl);
+  if (!imgResp.ok) throw new Error(`图片下载失败 (${imgResp.status})`);
+  const blob = await imgResp.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('图片转换失败'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * 调用阿里百炼万相生图，返回 data URL
+ * 万相不走 OpenAI 兼容的 /images/generations（该路径只对齐对话/向量），
+ * 官方文生图是 DashScope 原生多模态端点（同步返回，Token Plan 网关同构）：
+ *   POST {host}/api/v1/services/aigc/multimodal-generation/generation
+ *   请求 {model, input:{messages:[{role:"user",content:[{text:prompt}]}]}, parameters:{size}}
+ *   响应 output.choices[*].message.content[*].image → 临时 URL，拉取转存
+ * 用户只需填控制台给的 compatible-mode 地址，这里自动推导原生端点。
+ * @param {Object} opts
+ * @param {string} opts.apiKey  百炼 / Token Plan 专属 Key
+ * @param {string} opts.baseUrl 例如 https://dashscope.aliyuncs.com/compatible-mode/v1 或 Token Plan 专属地址
+ * @param {string} opts.model   例如 wan2.7-image / wan2.7-image-pro
+ * @param {string} opts.size    万相尺寸（* 分隔，如 1024*1024、720*1280）
+ * @param {string} opts.prompt  提示词
+ */
+function resolveWanxEndpoint(baseUrl) {
+  const b = (baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1').trim();
+  const m = b.match(/^(https?:\/\/[^/]+)/i);
+  const origin = m ? m[1] : b.replace(/\/+$/, '');
+  return `${origin}/api/v1/services/aigc/multimodal-generation/generation`;
+}
+
+export async function generateWanxImage({ apiKey, baseUrl, model, size, prompt }) {
+  if (!apiKey) throw new Error('未配置万相 API Key（在插图设置中填写）');
+  if (!prompt || !prompt.trim()) throw new Error('提示词为空');
+
+  const url = resolveWanxEndpoint(baseUrl);
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: model || 'wan2.7-image',
+        input: {
+          messages: [{ role: 'user', content: [{ text: prompt.trim() }] }]
+        },
+        parameters: { size: size || '1024*1024' }
+      })
+    });
+  } catch (e) {
+    throw new Error(`网络请求失败：${e.message || e}`);
+  }
+
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        detail = json.error?.message || json.message || text;
+      } catch (e2) {
+        detail = text;
+      }
+    } catch (e3) {
+      detail = '无法读取错误响应';
+    }
+    throw new Error(`生图 API 请求失败 (${response.status})：${detail}`);
+  }
+
+  const data = await response.json();
+  // 原生格式：output.choices[*].message.content 为分块数组，图片块带 image（临时 URL）
+  const choices = data?.output?.choices || [];
+  for (const choice of choices) {
+    const parts = choice?.message?.content || [];
+    for (const part of parts) {
+      if (part?.image) return await fetchUrlAsDataUrl(part.image);
+      if (part?.b64_json) return `data:image/png;base64,${part.b64_json}`;
+    }
+  }
+  throw new Error('生图 API 未返回图片数据');
+}
+
+/**
+ * 调用 xAI Grok Imagine 生成一张图，返回 data:image/...;base64,... 形式的 data URL
+ * 接口与 Seedream 同为 OpenAI 兼容的 images/generations 格式，可走 xAI 中转站
+ * @param {Object} opts
+ * @param {string} opts.apiKey     xAI API Key / 中转站 Key
+ * @param {string} opts.baseUrl    官方 https://api.x.ai/v1 或中转地址
+ * @param {string} opts.model      grok-imagine-image / grok-imagine-image-quality
+ * @param {string} opts.aspectRatio 宽高比（9:16/2:3/3:4/1:1/4:3/3:2/16:9）
+ * @param {string} opts.resolution 1k / 2k
+ * @param {string} opts.prompt     提示词（中文支持）
+ */
+export async function generateGrokImage({ apiKey, baseUrl, model, aspectRatio, resolution, prompt }) {
+  if (!apiKey) throw new Error('未配置 Grok API Key（在其他设置 → 插图功能中填写）');
+  if (!prompt || !prompt.trim()) throw new Error('提示词为空');
+
+  const url = `${(baseUrl || 'https://api.x.ai/v1').replace(/\/+$/, '')}/images/generations`;
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: (model || 'grok-imagine-image').trim(),
+        prompt: prompt.trim(),
+        n: 1,
+        aspect_ratio: aspectRatio || '9:16',
+        resolution: resolution || '1k',
+        response_format: 'b64_json'
+      })
+    });
+  } catch (e) {
+    throw new Error(`网络请求失败：${e.message || e}`);
+  }
+
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        detail = json.error?.message || json.message || text;
+      } catch (e2) {
+        detail = text;
+      }
+    } catch (e3) {
+      detail = '无法读取错误响应';
+    }
+    throw new Error(`生图 API 请求失败 (${response.status})：${detail}`);
+  }
+
+  const data = await response.json();
+  const item = data?.data?.[0] || {};
+  if (item.b64_json) {
+    return `data:image/png;base64,${item.b64_json}`;
+  }
+  // 中转站可能忽略 response_format 只回 url：拉下来转 base64（url 会过期，不能直接存）
+  if (item.url) {
+    try {
+      return await fetchUrlAsDataUrl(item.url);
+    } catch (e) {
+      throw new Error(`图片下载失败：${e.message || e}`);
+    }
+  }
+  throw new Error('生图 API 未返回图片数据');
+}
+
+// 中转 chat/completions 模式：把生图包装成 OpenAI 聊天接口的应答里提取图片
+// content 可能的形态：markdown 图片链接 / 裸 URL / data: URI / image_url 数组部件
+async function extractImageFromChatContent(content) {
+  if (!content) throw new Error('中转站未返回图片数据');
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      const url = part?.image_url?.url || part?.image_url?.uri || (part?.type === 'image' && part?.url);
+      if (url) {
+        return url.startsWith('data:') ? url : await fetchUrlAsDataUrl(url);
+      }
+      const b64 = part?.inlineData?.data || part?.inline_data?.data || part?.b64_json;
+      if (b64) return `data:image/png;base64,${b64}`;
+    }
+    throw new Error('中转站返回内容中没有图片部件');
+  }
+  const text = String(content);
+  if (text.includes('data:image')) {
+    const m = text.match(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+/);
+    if (m) return m[0].replace(/\s/g, '');
+  }
+  const md = text.match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/) || text.match(/(https?:\/\/[^\s)"'<>]+\.(?:png|jpe?g|webp)[^\s)"'<>]*)/i) || text.match(/(https?:\/\/[^\s)"'<>]+)/);
+  if (md) return await fetchUrlAsDataUrl(md[1]);
+  throw new Error(`中转站未返回图片：${text.slice(0, 120)}`);
+}
+
+/**
+ * 中转站 chat/completions 生图：POST {baseUrl}/v1/chat/completions，OpenAI 兼容格式
+ * 部分中转站把 Gemini Flash Image 等模型包装在这个端点下
+ */
+async function generateGeminiImageViaChat({ apiKey, baseUrl, model, prompt }) {
+  const root = (baseUrl || '').replace(/\/+$/, '');
+  if (!root) throw new Error('中转模式需要填写 Base URL（中转站地址）');
+  const url = /\/chat\/completions$/.test(root) ? root
+    : /\/v1$/.test(root) ? `${root}/chat/completions`
+    : `${root}/v1/chat/completions`;
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: (model || 'gemini-3.1-flash-image').trim(),
+        messages: [{ role: 'user', content: prompt.trim() }],
+        stream: false
+      })
+    });
+  } catch (e) {
+    throw new Error(`网络请求失败：${e.message || e}`);
+  }
+
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        detail = json.error?.message || json.message || text;
+      } catch (e2) {
+        detail = text;
+      }
+    } catch (e3) {
+      detail = '无法读取错误响应';
+    }
+    throw new Error(`生图 API 请求失败 (${response.status})：${detail}`);
+  }
+
+  const data = await response.json();
+  const message = data?.choices?.[0]?.message || {};
+  return await extractImageFromChatContent(message.content);
+}
+
+/**
+ * 构造 grokweb（局域网自托管反代）chat/completions 生图请求体（纯函数，可单测）。
+ * 反代（如 fandai）把 grok.com 网页账号包装成 OpenAI 聊天接口：发普通聊天请求，
+ * 网页版出图后图片以 markdown 链接混在回复文本里（图片后出也会等齐——见反代 WS 收流逻辑）。
+ * images：可选，参考图 data URL 数组（OpenAI 多模态 image_url 部件，反代上限 4 张，超出截断）；
+ * 带参考图时指令改为"容貌以参考图为准"，文字锚点继续管身材/场景。
+ */
+export function buildGrokWebChatBody(model, prompt, images) {
+  const hasRef = Array.isArray(images) && images.length > 0;
+  const text = hasRef
+    ? `参考所附图片中人物的容貌特征（同一张脸、发型与神态），生成一张图片：${prompt.trim()}\n要求：直接出图，人物长相以参考图为准，身材与画面按描述执行，不要输出任何解释或询问。`
+    : `请生成一张图片：${prompt.trim()}\n要求：直接出图，画面按描述执行，不要输出任何解释或询问。`;
+  const content = hasRef
+    ? [
+        { type: 'text', text },
+        ...images.slice(0, 4).map((u) => ({ type: 'image_url', image_url: { url: u } }))
+      ]
+    : text;
+  return {
+    model: (model || 'grok-4.6-fast').trim(),
+    messages: [{ role: 'user', content }],
+    stream: false
+  };
+}
+
+/**
+ * grokweb 网页反代生图：POST {baseUrl}/chat/completions，OpenAI 兼容聊天格式
+ * 适配 fandai 类反代：grok.com 网页版无 /images/generations，图片经回复文本的
+ * markdown 链接返回（链接已指向反代 /image-proxy 回源，key 内嵌可直接下载）。
+ * @param {Object} opts
+ * @param {string} opts.apiKey  反代的 api_key（config.yaml 里的自定义 key）
+ * @param {string} opts.baseUrl 反代地址，如 http://192.168.2.42:8000/v1（兼容填到 /chat/completions）
+ * @param {string} opts.model   反代模型名，默认 grok-4.6-fast
+ * @param {string} opts.prompt  提示词（中文支持）
+ */
+export async function generateGrokWebImage({ apiKey, baseUrl, model, prompt, images }) {
+  if (!apiKey) throw new Error('未配置反代 API Key（插图设置 → Grok 网页反代 中填写）');
+  if (!prompt || !prompt.trim()) throw new Error('提示词为空');
+  const root = (baseUrl || '').replace(/\/+$/, '');
+  if (!root) throw new Error('Grok 网页反代需要填写 Base URL（反代地址，如 http://192.168.x.x:8000/v1）');
+  const url = /\/chat\/completions$/.test(root) ? root
+    : /\/v1$/.test(root) ? `${root}/chat/completions`
+    : `${root}/v1/chat/completions`;
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(buildGrokWebChatBody(model, prompt, images))
+    });
+  } catch (e) {
+    throw new Error(`网络请求失败：${e.message || e}`);
+  }
+
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        detail = json.error?.message || json.message || text;
+      } catch (e2) {
+        detail = text;
+      }
+    } catch (e3) {
+      detail = '无法读取错误响应';
+    }
+    throw new Error(`反代生图请求失败 (${response.status})：${detail}`);
+  }
+
+  const data = await response.json();
+  const message = data?.choices?.[0]?.message || {};
+  return await extractImageFromChatContent(message.content);
+}
+
+/**
+ * 调用 Gemini 生图模型（Nano Banana 系列），返回 data:image/...;base64,... 形式的 data URL
+ * @param {Object} opts
+ * @param {string} opts.apiKey     Gemini API Key / 中转站 Key
+ * @param {string} opts.baseUrl    官方 https://generativelanguage.googleapis.com 或中转地址
+ * @param {string} opts.model      如 gemini-3.1-flash-lite-image / gemini-3-pro-image
+ * @param {string} opts.aspectRatio 宽高比（9:16/2:3/3:4/1:1/16:9 等）
+ * @param {string} opts.imageSize  1K/2K/4K（Lite 仅支持 1K）
+ * @param {string} opts.prompt     提示词（中文支持）
+ * @param {string} opts.apiMode    'generateContent'（官方，默认）| 'chatCompletions'（中转 OpenAI 聊天格式）
+ */
+export async function generateGeminiImage({ apiKey, baseUrl, model, aspectRatio, imageSize, prompt, apiMode }) {
+  if (!apiKey) throw new Error('未配置 Gemini API Key（在其他设置 → 插图功能中填写）');
+  if (!prompt || !prompt.trim()) throw new Error('提示词为空');
+
+  // 中转站把 Gemini 生图包装成 OpenAI chat/completions 的情况：走完全不同的请求/应答格式
+  if (apiMode === 'chatCompletions') {
+    return await generateGeminiImageViaChat({ apiKey, baseUrl, model, prompt });
+  }
+
+  const modelId = (model || 'gemini-3.1-flash-lite-image').trim();
+  const root = (baseUrl || 'https://generativelanguage.googleapis.com').replace(/\/+$/, '');
+  // key 同时放请求头与查询参数：官方认 header，部分中转站只认 ?key=
+  const url = `${root}/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey
+      },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt.trim() }] }],
+        generationConfig: {
+          responseModalities: ['TEXT', 'IMAGE'],
+          imageConfig: {
+            aspectRatio: aspectRatio || '9:16',
+            imageSize: imageSize || '1K'
+          }
+        }
+      })
+    });
+  } catch (e) {
+    throw new Error(`网络请求失败：${e.message || e}`);
+  }
+
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        detail = json.error?.message || json.message || text;
+      } catch (e2) {
+        detail = text;
+      }
+    } catch (e3) {
+      detail = '无法读取错误响应';
+    }
+    throw new Error(`生图 API 请求失败 (${response.status})：${detail}`);
+  }
+
+  const data = await response.json();
+
+  // 安全拦截形态一：prompt 级直接拒绝
+  const blockReason = data?.promptFeedback?.blockReason;
+  if (blockReason) {
+    throw new Error(`内容被 Gemini 安全审核拦截（${blockReason}），已触发自动改写重试`);
+  }
+
+  const candidates = data?.candidates || [];
+  // 安全拦截形态二：候选被 finishReason 标记（IMAGE_SAFETY / SAFETY / BLOCKLIST 等）
+  const safetyFinish = candidates.find(c => /SAFETY|BLOCK|PROHIBITED/i.test(c?.finishReason || ''));
+  if (safetyFinish) {
+    throw new Error(`内容被 Gemini 安全审核拦截（${safetyFinish.finishReason}），已触发自动改写重试`);
+  }
+
+  // 从所有候选的所有 parts 里找图片（兼容 inlineData / inline_data 两种命名）
+  for (const cand of candidates) {
+    for (const part of (cand?.content?.parts || [])) {
+      const inline = part.inlineData || part.inline_data;
+      if (inline && inline.data) {
+        const mime = inline.mimeType || inline.mime_type || 'image/png';
+        return `data:${mime};base64,${inline.data}`;
+      }
+    }
+  }
+
+  // 无图：把模型返回的文本片段（通常是拒绝理由）带进错误信息，方便诊断
+  const textSnippet = candidates
+    .flatMap(c => (c?.content?.parts || []))
+    .map(p => p.text || '')
+    .join(' ')
+    .slice(0, 120);
+  throw new Error(`Gemini 未返回图片数据${textSnippet ? `：${textSnippet}` : ''}`);
+}
+
+// ---------- 提示词流水线（副 API） ----------
+
+// 判断是否内容审核类错误（网络/鉴权/限流错误不该触发改写重试）
+export function isModerationError(err) {
+  const msg = (err && err.message) || '';
+  return /敏感|违规|审核|不合规|不适宜|risk|safety|moderation|inappropriate|policy|blocked/i.test(msg);
+}
+
+// 风格锚定后缀：App 层固定拼接，保证各轮插图风格一致（不依赖副 API 自觉，清洗改写也洗不掉）
+// 风格后缀：每条提示词末尾必带。Grok 官方建议的反漫画感压舱石 + 皮肤质感词（抗塑料感/AI 感），

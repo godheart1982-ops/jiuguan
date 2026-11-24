@@ -8,7 +8,10 @@
     (function() {
       try {
         var t = localStorage.getItem('jiuguan_theme');
-        if (t === 'tavern' || t === 'charcoal' || t === 'parchment') {
+        if (t === 'system') {
+          var isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+          document.documentElement.dataset.theme = isLight ? 'parchment' : 'tavern';
+        } else if (t === 'tavern' || t === 'charcoal' || t === 'parchment') {
           document.documentElement.dataset.theme = t;
         }
       } catch (e) {}
@@ -59,6 +62,10 @@
           <span>⚙️</span>
           <span>API 设置</span>
         </div>
+        <div class="sidebar-item" id="btn-ui-settings">
+          <span>🎨</span>
+          <span>界面设置</span>
+        </div>
         <div class="sidebar-item" id="btn-image-settings">
           <span>🖼</span>
           <span>插图设置</span>
@@ -76,7 +83,7 @@
       <span class="mobile-spacer"></span>
     </div>
     <main class="main-content" id="main-content">
-      <div id="boot-log" style="padding: 20px; color: #aaa; font-family: monospace; white-space: pre-wrap;">启动中...</div>
+      <div class="app-boot-splash" id="boot-splash">启动中…</div>
       <!-- 动态页面内容 -->
     </main>
   </div>
@@ -96,50 +103,7 @@
       msg.textContent = '未处理的 Promise 错误：\n' + (e.reason && e.reason.stack ? e.reason.stack : String(e.reason));
       document.body.appendChild(msg);
     });
-    (function() {
-      var bootLog = document.getElementById('boot-log');
-      function log(msg) {
-        if (bootLog) bootLog.textContent += '\n' + msg;
-        console.log('[boot]', msg);
-      }
-      log('准备加载测试模块...');
-      import('./src/test-module.js')
-        .then(function() {
-          log('测试模块加载完成, testModuleLoaded=' + window.testModuleLoaded);
-          var deps = [
-            './src/services/storage.js',
-            './src/services/api.js',
-            './src/services/foreground.js',
-            '@capacitor/core',
-            'marked',
-            './src/utils/counter.js',
-            './src/utils/big-editor.js',
-            './src/utils/tokenizer.js',
-            './src/pages/home.js',
-            './src/pages/character-edit.js',
-            './src/pages/settings.js',
-            './src/pages/chat.js'
-          ];
-          function testNext(i) {
-            if (i >= deps.length) {
-              log('准备加载 app.js...');
-              return import('./src/app.js');
-            }
-            return import(deps[i])
-              .then(function() { log(deps[i] + ' 加载成功'); })
-              .catch(function(e) { log(deps[i] + ' 加载失败: ' + e.message); })
-              .then(function() { return testNext(i + 1); });
-          }
-          return testNext(0);
-        })
-        .then(function() {
-          log('app.js 加载完成');
-        })
-        .catch(function(e) {
-          log('加载失败: ' + (e.message || String(e)));
-          log('错误详情: ' + (e.stack || JSON.stringify(e)));
-        });
-    })();
   </script>
+  <script type="module" src="src/app.js"></script>
 </body>
 </html>

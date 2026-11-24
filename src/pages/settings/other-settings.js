@@ -14,7 +14,7 @@ import {
 } from '../../services/webdav-backup.js';
 import { encryptBackup, isEncryptedBackup, parseBackupText } from '../../utils/backup-crypto.js';
 import { promptBackupPassword } from '../../utils/prompt-dialog.js';
-import { escapeHtml, applyFontSize, applyTheme, normalizeTheme, THEMES } from './settings-shared.js';
+import { escapeHtml, applyFontSize, applyTheme } from './settings-shared.js';
 
 export async function renderOtherSettingsModal() {
   // 如果已经存在弹窗，先移除
@@ -22,26 +22,9 @@ export async function renderOtherSettingsModal() {
   if (existing) existing.remove();
 
   const config = await getConfig();
-  const ui = config.ui || { fontSize: 14, theme: 'tavern' };
-  const initialTheme = normalizeTheme(ui.theme);
-  let selectedTheme = initialTheme;
   const debug = config.debug || { previewBeforeSend: false };
   const behavior = config.behavior || { autoCompleteLastModule: false };
   const webdav = normalizeWebdavConfig(config.webdav);
-
-  const themeCardsHtml = THEMES.map((t) => {
-    const activeClass = t.id === selectedTheme ? ' active' : '';
-    const dots = t.swatches
-      .map((c) => `<span class="theme-swatch-dot" style="background:${c}"></span>`)
-      .join('');
-    return `
-      <button type="button" class="theme-card${activeClass}" data-theme-id="${t.id}">
-        <div class="theme-swatch-row">${dots}</div>
-        <div class="theme-card-name">${escapeHtml(t.name)}</div>
-        <div class="theme-card-desc">${escapeHtml(t.desc)}</div>
-      </button>
-    `;
-  }).join('');
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -54,23 +37,9 @@ export async function renderOtherSettingsModal() {
         <button class="btn btn-ghost btn-icon" id="btn-close-other-settings">✕</button>
       </div>
       <div class="modal-body">
-        <div class="form-section">
-          <div class="form-section-title">界面设置</div>
-          <div class="form-hint" style="margin-bottom: 12px;">插图 / 生图相关选项已移至侧边栏「插图设置」。</div>
-          <div class="form-group">
-            <label class="form-label">界面主题（点击实时预览，保存后生效）</label>
-            <div class="theme-picker-grid" id="setting-theme-picker">
-              ${themeCardsHtml}
-            </div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">字体大小（px）</label>
-            <input class="form-input" id="setting-font-size" type="number" min="10" max="24" step="1" value="${ui.fontSize || 14}">
-            <div class="form-hint">聊天界面和全局文字大小，默认 14px</div>
-          </div>
-        </div>
+        <div class="form-hint" style="margin-bottom: 12px;">主题与字体已移至侧边栏「界面设置」，生图选项在「插图设置」。</div>
 
-        <div class="form-section">
+        <div class="form-section" style="margin-top: 0; padding-top: 0; border-top: none;">
           <div class="form-section-title">生成行为</div>
           <div class="form-group">
             <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
@@ -212,51 +181,20 @@ export async function renderOtherSettingsModal() {
     autoAdvanceEl.value = DEFAULT_AUTO_ADVANCE_PROMPT;
   });
 
-  // 主题卡片选择与实时预览
-  const themePicker = overlay.querySelector('#setting-theme-picker');
-  if (themePicker) {
-    themePicker.querySelectorAll('.theme-card').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        selectedTheme = normalizeTheme(btn.dataset.themeId);
-        themePicker.querySelectorAll('.theme-card').forEach((el) => {
-          el.classList.toggle('active', el.dataset.themeId === selectedTheme);
-        });
-        applyTheme(selectedTheme);
-      });
-    });
-  }
-
-  function closeModal(revertTheme = true) {
-    if (revertTheme) {
-      applyTheme(initialTheme);
-    }
+  function closeModal() {
     overlay.remove();
   }
 
-  document.getElementById('btn-close-other-settings').addEventListener('click', () => closeModal(true));
-  document.getElementById('btn-cancel-other-settings').addEventListener('click', () => closeModal(true));
+  document.getElementById('btn-close-other-settings').addEventListener('click', closeModal);
+  document.getElementById('btn-cancel-other-settings').addEventListener('click', closeModal);
 
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) closeModal(true);
+    if (e.target === overlay) closeModal();
   });
 
   document.getElementById('btn-save-other-settings').addEventListener('click', async () => {
-    const fontSizeRaw = document.getElementById('setting-font-size').value.trim();
-    const fontSize = fontSizeRaw ? parseInt(fontSizeRaw, 10) : 14;
-
-    if (isNaN(fontSize) || fontSize < 10 || fontSize > 24) {
-      alert('字体大小请输入 10-24 之间的数字');
-      return;
-    }
-
-    // 重新读取最新配置，避免覆盖掉 API 等字段
+    // 重新读取最新配置，避免覆盖掉 API / UI 等字段
     const latestConfig = await getConfig();
-    // 保留 ui 下其他字段（折叠状态等），只更新本页负责的几项
-    latestConfig.ui = {
-      ...(latestConfig.ui || {}),
-      fontSize,
-      theme: selectedTheme
-    };
     latestConfig.debug = {
       previewBeforeSend: document.getElementById('setting-preview-before-send').checked
     };
@@ -284,12 +222,8 @@ export async function renderOtherSettingsModal() {
       lastRestoreAt: prevWebdav.lastRestoreAt
     });
 
-    // 即时应用字体大小与主题
-    applyFontSize(fontSize);
-    applyTheme(selectedTheme);
-
     await saveConfig(latestConfig);
-    closeModal(false);
+    closeModal();
   });
 
   function readWebdavForm() {

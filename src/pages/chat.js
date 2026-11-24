@@ -21,6 +21,8 @@ import { normalizeAuthorNote } from '../services/author-note.js';
 import { beginNewSwipe, activateSwipe, discardInactiveSwipes, syncActiveSwipe, activeSwipeIndex, imagePathsLostByDiscard } from './chat/chat-swipes.js';
 import { turnIdOf, truncateMemoryForResend, emptyMemoryState } from '../services/memory-engine.js';
 
+// 会话级未发送草稿暂存（内存 Map，切换角色/世界书/设置后再切回不丢字）
+const chatDrafts = new Map();
 
 export async function renderChat(container, characterId, chatId) {
   container.innerHTML = '';
@@ -148,6 +150,16 @@ export async function renderChat(container, characterId, chatId) {
   messagesContainer.className = 'chat-messages';
   messagesContainer.id = 'chat-messages';
   chatContainer.appendChild(messagesContainer);
+
+  // 一键回到底部悬浮按钮（上翻超过一定距离时出现）
+  const scrollBottomBtn = document.createElement('button');
+  scrollBottomBtn.type = 'button';
+  scrollBottomBtn.className = 'chat-scroll-bottom-btn hidden';
+  scrollBottomBtn.id = 'btn-scroll-bottom';
+  scrollBottomBtn.title = '回到底部';
+  scrollBottomBtn.setAttribute('aria-label', '回到底部');
+  scrollBottomBtn.textContent = '↓';
+  chatContainer.appendChild(scrollBottomBtn);
 
   // 输入区
   const inputArea = document.createElement('div');
@@ -361,6 +373,17 @@ export async function renderChat(container, characterId, chatId) {
     }
   });
 
+  const draftKey = `${characterId}:${currentChat.id}`;
+
+  function updateScrollBottomBtn() {
+    const dist = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
+    scrollBottomBtn.classList.toggle('hidden', dist <= 220);
+  }
+  messagesContainer.addEventListener('scroll', updateScrollBottomBtn, { passive: true });
+  scrollBottomBtn.addEventListener('click', () => {
+    messagesContainer.scrollTo({ top: messagesContainer.scrollHeight, behavior: 'smooth' });
+  });
+
   function adjustInputHeight() {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 160) + 'px';
@@ -376,7 +399,17 @@ export async function renderChat(container, characterId, chatId) {
     }
   }
 
+  // 恢复本对话未发送草稿
+  const savedDraft = chatDrafts.get(draftKey);
+  if (savedDraft) {
+    input.value = savedDraft;
+    adjustInputHeight();
+    updateInputCounter();
+  }
+
   input.addEventListener('input', () => {
+    if (input.value) chatDrafts.set(draftKey, input.value);
+    else chatDrafts.delete(draftKey);
     adjustInputHeight();
     updateInputCounter();
   });
@@ -436,6 +469,7 @@ export async function renderChat(container, characterId, chatId) {
     currentChat.messages.push(userMsg);
     appendMessage(messagesContainer, userMsg, null, currentChat, handleRefresh, renderMessages, handleEditResend, handleSwipe, handleBranch);
     input.value = '';
+    chatDrafts.delete(draftKey);
     input.style.height = 'auto';
     updateInputCounter();
     scrollToBottom(messagesContainer);
