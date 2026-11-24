@@ -268,14 +268,35 @@ export function formatWorldBookBlock(entries) {
   );
 }
 
+export function partitionDefaultWorldBookEntries(entries) {
+  const prefix = `book:${DEFAULT_ADULT_WORLD_BOOK_ID}:`;
+  const regular = [];
+  const finalEntries = [];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    (String(entry.uid || '').startsWith(prefix) ? finalEntries : regular).push(entry);
+  }
+  return { regular, finalEntries };
+}
+
 /**
- * 角色本轮世界书注入文本（异步：需读绑定库）
+ * 普通世界书与默认破甲分别注入：默认破甲不再混在第5段，而由调用方放到 system 末尾。
  */
-export async function resolveWorldBookInjection(character, historyMessages, userMessage) {
-  if (!character) return '';
+export async function resolveWorldBookInjectionParts(character, historyMessages, userMessage) {
+  if (!character) return { worldBookBlock: '', finalBlock: '', allBlock: '' };
   const settings = normalizeWorldBookSettings(character.worldBook);
-  if (!settings.enabled) return '';
+  if (!settings.enabled) return { worldBookBlock: '', finalBlock: '', allBlock: '' };
   const pool = await collectCharacterWorldBookEntries(character);
   const selected = activateWorldBookEntries(pool, historyMessages, userMessage, settings);
-  return formatWorldBookBlock(selected);
+  const { regular, finalEntries } = partitionDefaultWorldBookEntries(selected);
+  return {
+    worldBookBlock: formatWorldBookBlock(regular),
+    finalBlock: finalEntries.map((entry) => String(entry.content || '').trim()).filter(Boolean).join('\n\n'),
+    allBlock: formatWorldBookBlock(selected)
+  };
+}
+
+/** 兼容原调用：需要完整世界书时仍按原顺序返回。 */
+export async function resolveWorldBookInjection(character, historyMessages, userMessage) {
+  const parts = await resolveWorldBookInjectionParts(character, historyMessages, userMessage);
+  return parts.allBlock;
 }

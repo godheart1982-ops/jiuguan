@@ -8,7 +8,7 @@ import { isPaidImageProvider } from './image-gen.js';
 import { sanitizeHistoryIllustrationMarkers } from './illustration-markers.js';
 import { trimHistoricalActionOptions, buildActionOptionContext } from './action-options.js';
 import { insertAuthorNote, shouldInjectAuthorNote, storyUserTurnCount } from './author-note.js';
-import { resolveWorldBookInjection } from './world-book.js';
+import { resolveWorldBookInjectionParts } from './world-book.js';
 import { assembleCardDescription, buildOffscreenRosterBlock } from './card-modules.js';
 import { resolveCardPrompt } from './prompt-library.js';
 import { formatCurrentMemoryState, formatRecentMemoryIndexes, formatRecalledTurns, RECENT_RAW_TURNS } from './memory-engine.js';
@@ -89,8 +89,8 @@ export async function buildMessages(character, historyMessages, userMessage, mem
     systemContent += '\n\n' + offscreenRoster;
   }
 
-  // 世界书：角色专属 + 绑定库；常驻/关键词/递归；设定后注入（主控信息之后）
-  const worldBookBlock = await resolveWorldBookInjection(character, historyMessages, userMessage);
+  // 普通世界书仍在设定区；默认破甲条目单独留到 system 最末尾，避免被后续内容稀释。
+  const { worldBookBlock, finalBlock: finalWorldBookBlock } = await resolveWorldBookInjectionParts(character, historyMessages, userMessage);
   if (worldBookBlock) {
     systemContent += '\n\n' + worldBookBlock;
   }
@@ -225,6 +225,11 @@ export async function buildMessages(character, historyMessages, userMessage, mem
   // 元指令模式说明：替代全部剧情向注入（格式/思维链/插图等已在上方跳过），剧情状态本轮冻结
   if (metaCommand) {
     systemContent += '\n\n【元指令模式】本轮用户输入以 $ 开头，是系统指令而非剧情内容：不推进剧情与时间、不输出任何格式模块（状态栏/世界信息/行动选项/插图等一律不输出）、不写思维链。基于角色卡、世界书、记忆与事实备忘，直接、如实地回答指令本身；若指令要求修改设定或剧情走向，明确确认你将如何执行。';
+  }
+
+  // 默认破甲条目是 system 的最后一段；解绑或关闭世界书时此块为空，不会残留。
+  if (finalWorldBookBlock) {
+    systemContent += '\n\n' + finalWorldBookBlock;
   }
 
   messages.push({
