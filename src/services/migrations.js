@@ -29,7 +29,8 @@ function createDefaultConfig() {
       maxTokens: null
     },
     ui: {
-      fontSize: 14
+      fontSize: 14,
+      theme: 'tavern'
     },
     debug: {
       previewBeforeSend: false
@@ -161,6 +162,16 @@ const CONFIG_STEPS = [
         } else {
           config.api.memoryApi = {};
         }
+      }
+    }
+  },
+  {
+    name: 'ui.theme 默认值',
+    migrate(config) {
+      if (!config.ui || typeof config.ui !== 'object') config.ui = { fontSize: 14 };
+      const validThemes = new Set(['tavern', 'charcoal', 'parchment']);
+      if (!validThemes.has(config.ui.theme)) {
+        config.ui.theme = 'tavern';
       }
     }
   }

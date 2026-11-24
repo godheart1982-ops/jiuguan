@@ -2,4 +2,4 @@
 export { renderApiSettingsModal } from './settings/api-settings.js';
 export { renderOtherSettingsModal } from './settings/other-settings.js';
 export { renderImageSettingsModal } from './settings/image-settings.js';
-export { applyFontSize } from './settings/settings-shared.js';
+export { applyFontSize, applyTheme, normalizeTheme, THEMES } from './settings/settings-shared.js';

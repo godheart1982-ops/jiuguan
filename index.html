@@ -2,8 +2,18 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>酒馆 - 简化版 AI 角色扮演</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>酒馆 - AI 角色扮演</title>
+  <script>
+    (function() {
+      try {
+        var t = localStorage.getItem('jiuguan_theme');
+        if (t === 'tavern' || t === 'charcoal' || t === 'parchment') {
+          document.documentElement.dataset.theme = t;
+        }
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="src/styles.css">
   <script type="importmap">
   {

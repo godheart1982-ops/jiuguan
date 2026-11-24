@@ -10,6 +10,7 @@ test('migrateConfig: null 返回完整默认配置', () => {
   const cfg = migrateConfig(null);
   assert.equal(cfg.api.baseUrl, 'https://api.openai.com/v1');
   assert.equal(cfg.ui.fontSize, 14);
+  assert.equal(cfg.ui.theme, 'tavern');
   assert.equal(cfg.search.enabled, false);
   assert.equal(cfg.webdav.baseUrl, 'https://dav.jianguoyun.com/dav');
   assert.equal(cfg.webdav.deviceName, '');
@@ -68,6 +69,13 @@ test('migrateConfig: 已有 memoryApi 不被 memoryModel 覆盖', () => {
     }
   });
   assert.equal(cfg.api.memoryApi.model, 'new');
+});
+
+test('migrateConfig: 老配置缺省或非法 theme 回退为 tavern，合法 theme 保留', () => {
+  assert.equal(migrateConfig({ ui: { fontSize: 16 } }).ui.theme, 'tavern');
+  assert.equal(migrateConfig({ ui: { fontSize: 16, theme: 'unknown' } }).ui.theme, 'tavern');
+  assert.equal(migrateConfig({ ui: { fontSize: 16, theme: 'charcoal' } }).ui.theme, 'charcoal');
+  assert.equal(migrateConfig({ ui: { fontSize: 16, theme: 'parchment' } }).ui.theme, 'parchment');
 });
 
 // ---------- migrateChat ----------

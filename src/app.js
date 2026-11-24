@@ -3,7 +3,7 @@ import { renderCharacterEdit } from './pages/character-edit.js';
 import { renderChat } from './pages/chat.js';
 import { renderWorldBookManager } from './pages/world-book-manager.js';
 import { renderPromptLibrary } from './pages/prompt-library.js';
-import { renderApiSettingsModal, renderOtherSettingsModal, renderImageSettingsModal, applyFontSize } from './pages/settings.js';
+import { renderApiSettingsModal, renderOtherSettingsModal, renderImageSettingsModal, applyFontSize, applyTheme } from './pages/settings.js';
 import { renderTokenStatsModal } from './pages/token-stats.js';
 import { listCharacters, getAvatarDataUrl, getConfig, saveConfig } from './services/storage.js';
 import { requestNotificationPermission, startGenerationForeground } from './services/foreground.js';
@@ -287,6 +287,8 @@ if (sidebarBackdrop) {
 
     const config = await getConfig();
     bootLog('getConfig 完成');
+    applyTheme(config.ui && config.ui.theme);
+    bootLog('主题已应用');
     if (config.ui && config.ui.fontSize) {
       applyFontSize(config.ui.fontSize);
       bootLog('字体大小已应用');
