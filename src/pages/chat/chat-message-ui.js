@@ -1,5 +1,6 @@
 // 消息 DOM：气泡、右键菜单、编辑、新建会话
 import { saveChat, createUUID } from '../../services/storage.js';
+import { splitActionOptionsBlock } from '../../services/action-options.js';
 import { countTokens } from '../../utils/tokenizer.js';
 import { escapeHtml, extractThinkingForDisplay } from './chat-utils.js';
 import { renderMarkdown, renderAssistantDisplay } from './chat-markdown.js';
@@ -37,7 +38,38 @@ export async function createNewChat(character) {
   return chat;
 }
 
-export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh, onUpdate, onEditResend, onSwipe, onBranch) {
+const CIRCLED_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨'];
+
+function buildActionOptionsPickerHtml(options, selectedNumbers) {
+  const selected = Array.isArray(selectedNumbers) ? selectedNumbers : [];
+  const rows = options.map((opt) => {
+    const orderIdx = selected.indexOf(opt.number);
+    const isSel = orderIdx !== -1;
+    const badge = isSel ? (CIRCLED_NUMS[orderIdx] || `#${orderIdx + 1}`) : '';
+    return `
+      <div class="action-option-row">
+        <button type="button" class="action-option-card${isSel ? ' selected' : ''}" data-opt-num="${opt.number}">
+          <span class="action-option-order">${badge}</span>
+          <span class="action-option-num">${opt.number}.</span>
+          <span class="action-option-text">${escapeHtml(opt.text)}</span>
+        </button>
+        <button type="button" class="action-option-fill-btn" data-opt-num="${opt.number}" title="抄入输入框编辑">✎</button>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="action-options-picker">
+      <div class="action-options-picker-header">
+        <span>行动选项</span>
+        <span class="action-options-picker-hint">可多选按顺序组合，点 ✎ 抄入输入框</span>
+      </div>
+      <div class="action-options-list">${rows}</div>
+    </div>
+  `;
+}
+
+export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh, onUpdate, onEditResend, onSwipe, onBranch, extraHandlers = {}) {
   const wrapper = document.createElement('div');
   wrapper.className = `message ${msg.role}`;
   wrapper.dataset.timestamp = msg.timestamp;
@@ -52,7 +84,9 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
   const isUser = msg.role === 'user';
   const isLastMessage = currentChat.messages.length > 0 && currentChat.messages[currentChat.messages.length - 1] === msg;
 
-  // 操作按钮：AI 最后一条 → 滑动候选 + 刷新；用户最后一条 → 编辑并重发
+  const { onContinue, onActionOptionToggle, onActionOptionFill, getSelectedActionOptions } = extraHandlers || {};
+
+  // 操作按钮：AI 最后一条 → 滑动候选 + 续写 + 刷新；用户最后一条 → 编辑并重发
   let actionsHtml = '';
   if (isAssistant && isLastMessage && onRefresh) {
     const count = swipeCount(msg);
@@ -62,7 +96,10 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
       <span class="swipe-indicator">${swipeAt + 1}/${count}</span>
       <button type="button" class="message-action-btn btn-swipe" data-dir="1" ${swipeAt >= count - 1 ? 'disabled' : ''} title="下一稿">▶</button>
     ` : '';
-    actionsHtml = `<div class="message-actions">${swipeHtml}<button type="button" class="message-action-btn btn-refresh" title="再生成一稿，原来的会留下">🔄 刷新</button></div>`;
+    const continueHtml = onContinue
+      ? '<button type="button" class="message-action-btn btn-continue" title="接着这条回复末尾继续往下写（不新开轮次）">⏩ 续写</button>'
+      : '';
+    actionsHtml = `<div class="message-actions">${swipeHtml}${continueHtml}<button type="button" class="message-action-btn btn-refresh" title="再生成一稿，原来的会留下">🔄 刷新</button></div>`;
   } else if (isUser && isLastMessage && onEditResend) {
     actionsHtml = `<div class="message-actions"><button type="button" class="message-action-btn btn-edit-resend" title="编辑并重发">✎ 编辑</button></div>`;
   }
@@ -74,10 +111,28 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
     ? `<div class="message-thinking collapsed"><button type="button" class="message-thinking-toggle">💭 思考过程（点击展开）</button><div class="message-thinking-body markdown-body">${renderMarkdown(_disp.thinking)}</div></div>`
     : '';
 
+  let messageContentHtml = '';
+  let interactiveOptions = [];
+  if (isAssistant && isLastMessage && onActionOptionToggle) {
+    const optSplit = splitActionOptionsBlock(_disp.body);
+    if (optSplit.options.length > 0) {
+      interactiveOptions = optSplit.options;
+      const selected = getSelectedActionOptions ? getSelectedActionOptions() : [];
+      messageContentHtml =
+        renderAssistantDisplay(optSplit.before) +
+        buildActionOptionsPickerHtml(optSplit.options, selected) +
+        (optSplit.after ? renderMarkdown(optSplit.after) : '');
+    } else {
+      messageContentHtml = renderAssistantDisplay(_disp.body);
+    }
+  } else {
+    messageContentHtml = isAssistant ? renderAssistantDisplay(_disp.body) : renderMarkdown(_disp.body);
+  }
+
   wrapper.innerHTML = `
     <div class="message-body">
       ${thinkingHtml}
-      <div class="message-content markdown-body">${isAssistant ? renderAssistantDisplay(_disp.body) : renderMarkdown(_disp.body)}</div>
+      <div class="message-content markdown-body">${messageContentHtml}</div>
       <div class="message-footer">
         ${actionsHtml}
         <div class="message-meta">${roundHtml}<span class="message-time">${timeStr}</span>${abortedHtml}</div>
@@ -108,6 +163,14 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
         }
       });
     }
+    const continueBtn = wrapper.querySelector('.btn-continue');
+    if (continueBtn && onContinue) {
+      continueBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const index = currentChat.messages.findIndex(m => m.timestamp === msg.timestamp && m.role === 'assistant');
+        if (index !== -1) onContinue(index);
+      });
+    }
     wrapper.querySelectorAll('.btn-swipe').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -116,6 +179,28 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
         if (index !== -1) onSwipe(index, Number(btn.dataset.dir));
       });
     });
+  }
+
+  // 绑定最新一条 AI 回复的行动选项交互卡片
+  if (interactiveOptions.length > 0 && onActionOptionToggle) {
+    wrapper.querySelectorAll('.action-option-card').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const num = Number(btn.dataset.optNum);
+        const opt = interactiveOptions.find((o) => o.number === num);
+        if (opt) onActionOptionToggle(opt.number, opt.text);
+      });
+    });
+    if (onActionOptionFill) {
+      wrapper.querySelectorAll('.action-option-fill-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const num = Number(btn.dataset.optNum);
+          const opt = interactiveOptions.find((o) => o.number === num);
+          if (opt) onActionOptionFill(opt.text);
+        });
+      });
+    }
   }
 
   // 绑定编辑并重发按钮

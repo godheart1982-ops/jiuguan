@@ -22,6 +22,7 @@ const CHARACTER_FIELDS = [
   ['core', '一句话核心（20字内，身份+主要矛盾或目标+当前状态）'],
   ['presence', '在场状态'], ['offscreen', '最近场外状态'],
   ['appearance', '外貌身材'], ['kinks', '特殊性癖（体位/力度偏好不算）'],
+  ['sexExp', '性经历（如：总共1人合计:3次；仅实际发生时更新）'],
   ['outerAura', '外在气质'], ['innerAura', '实际内在气质'],
   ['relation', '关系名分'], ['stage', '关系阶段'], ['scores', '三轴进度'],
   ['mood', '当前情绪'], ['goal', '当前目标'], ['agreement', '关系约定'],

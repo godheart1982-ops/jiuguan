@@ -119,6 +119,22 @@ export function markActiveSwipeAborted(msg) {
   msg.aborted = true;
 }
 
+/** 续写完成后清除当前稿的中止标记。 */
+export function clearActiveSwipeAborted(msg) {
+  if (!msg) return;
+  if (swipeCount(msg) < 2) {
+    delete msg.aborted;
+    return;
+  }
+  const id = activeSwipeIndex(msg);
+  if (Array.isArray(msg.abortedSwipes)) {
+    const next = msg.abortedSwipes.filter((n) => n !== id);
+    if (next.length) msg.abortedSwipes = next;
+    else delete msg.abortedSwipes;
+  }
+  msg.aborted = false;
+}
+
 const LOCAL_IMG_RE = /local-img:\/\/([^?\s)"']+)/g;
 
 function localImagePaths(text) {

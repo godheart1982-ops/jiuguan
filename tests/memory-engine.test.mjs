@@ -602,3 +602,38 @@ test('休眠 NPC 动态分级折叠：超 6 人时折叠远期不在场人物，
   assert.ok(woken.includes('远期角色A特殊XP'));
   assert.ok(!woken.includes('远期角色B外貌168cm'));
 });
+
+test('sexExp（性经历）：补全后锁定保持、在场展示、快照保留且留空不重复附带整张角色卡', () => {
+  const s1 = applyMemoryStatePatch(emptyMemoryState(), {
+    characters: [{ name: '林静', core: '律所合伙人', presence: '在场', appearance: '168cm', outerAura: '冷淡', innerAura: '护短', sexExp: '总共1人合计:2次' }]
+  }, 'turn-1');
+  assert.equal(s1.characters[0].sexExp, '总共1人合计:2次');
+
+  // 后续轮次未传或传空字符串时保持锁定不漂移
+  const s2 = applyMemoryStatePatch(s1, {
+    characters: [{ name: '林静', mood: '平静', sexExp: '' }]
+  }, 'turn-2');
+  assert.equal(s2.characters[0].sexExp, '总共1人合计:2次');
+
+  // 状态格式化包含性经历
+  const formatted = formatMemoryState(s2);
+  assert.ok(formatted.includes('性经历=总共1人合计:2次'));
+
+  // 快照保留当轮 sexExp，分支/重发能准确还原历史次数
+  const snap = makeMemoryStateSnapshot(s2);
+  assert.equal(snap.characters[0].sexExp, '总共1人合计:2次');
+  const s3 = applyMemoryStatePatch(s2, {
+    characters: [{ name: '林静', sexExp: '总共1人合计:3次' }]
+  }, 'turn-3');
+  assert.equal(s3.characters[0].sexExp, '总共1人合计:3次');
+  assert.equal(snap.characters[0].sexExp, '总共1人合计:2次');
+
+  // 未成年或非亲密角色 sexExp 留空时不重复附带整份角色卡
+  const noSexExpState = {
+    ...emptyMemoryState(),
+    characters: [{ name: '小满', core: '高三学生', appearance: '162cm', outerAura: '开朗', innerAura: '敏感', sexExp: '' }]
+  };
+  const card = { name: '小满', characterModules: ['【一句话核心】高三学生'] };
+  const round = { user: { content: '小满吃早饭' }, assistant: { content: '小满喝牛奶' } };
+  assert.equal(characterCardForMemoryRound(card, noSexExpState, round), '');
+});

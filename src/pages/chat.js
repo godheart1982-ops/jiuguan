@@ -18,6 +18,7 @@ import { createMemoryStatus } from './chat/chat-memory-ui.js';
 import { createMessageListController } from './chat/chat-message-list.js';
 import { createSendController } from './chat/chat-send.js';
 import { normalizeAuthorNote } from '../services/author-note.js';
+import { extractActionOptions, composeActionOptionMessage } from '../services/action-options.js';
 import { beginNewSwipe, activateSwipe, discardInactiveSwipes, syncActiveSwipe, activeSwipeIndex, imagePathsLostByDiscard } from './chat/chat-swipes.js';
 import { turnIdOf, truncateMemoryForResend, emptyMemoryState } from '../services/memory-engine.js';
 
@@ -176,6 +177,7 @@ export async function renderChat(container, characterId, chatId) {
       </div>
       <div class="search-mount-detail hidden" id="search-mount-detail"></div>
     </div>
+    <div class="action-combo-bar hidden" id="action-combo-bar"></div>
     <div class="chat-input-wrapper">
       <textarea class="chat-input" id="chat-input" placeholder="输入消息..." rows="1"></textarea>
       <div class="chat-input-actions">
@@ -195,6 +197,76 @@ export async function renderChat(container, characterId, chatId) {
 
   // 消息列表：分页 / 轮次跳转 / 搜索（见 chat/chat-message-list.js）
   // onRefresh / onEditResend 在下方定义；调用时已初始化（function 声明提升）
+  let selectedOptionNumbers = [];
+  const CIRCLED_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨'];
+
+  function getLatestOptions() {
+    if (!currentChat || !Array.isArray(currentChat.messages) || !currentChat.messages.length) return [];
+    const last = currentChat.messages[currentChat.messages.length - 1];
+    if (!last || last.role !== 'assistant') return [];
+    return extractActionOptions(last.content);
+  }
+
+  function syncActionOptionUi() {
+    const latestOpts = getLatestOptions();
+    const validSet = new Set(latestOpts.map((o) => o.number));
+    selectedOptionNumbers = selectedOptionNumbers.filter((n) => validSet.has(n));
+
+    const cards = messagesContainer.querySelectorAll('.message.assistant:last-child .action-option-card');
+    cards.forEach((card) => {
+      const num = Number(card.dataset.optNum);
+      const orderIdx = selectedOptionNumbers.indexOf(num);
+      const isSel = orderIdx !== -1;
+      card.classList.toggle('selected', isSel);
+      const badgeEl = card.querySelector('.action-option-order');
+      if (badgeEl) {
+        badgeEl.textContent = isSel ? (CIRCLED_NUMS[orderIdx] || `#${orderIdx + 1}`) : '';
+      }
+    });
+
+    const comboBar = document.getElementById('action-combo-bar');
+    const chatInputEl = document.getElementById('chat-input');
+    if (!comboBar) return;
+    if (!selectedOptionNumbers.length) {
+      comboBar.classList.add('hidden');
+      comboBar.innerHTML = '';
+      if (chatInputEl) chatInputEl.placeholder = '输入消息...';
+      return;
+    }
+
+    const optMap = new Map(latestOpts.map((o) => [o.number, o.text]));
+    const chipsHtml = selectedOptionNumbers.map((num, idx) => {
+      const badge = CIRCLED_NUMS[idx] || `#${idx + 1}`;
+      const rawText = optMap.get(num) || '';
+      const shortText = rawText.length > 14 ? `${rawText.slice(0, 14)}…` : rawText;
+      return `<button type="button" class="action-combo-chip" data-opt-num="${num}" title="${escapeHtml(rawText)}（点击移除）"><span>${badge} ${num}. ${escapeHtml(shortText)}</span><span class="action-combo-chip-x">✕</span></button>`;
+    }).join('');
+
+    comboBar.innerHTML = `
+      <div class="action-combo-chips">${chipsHtml}</div>
+      <button type="button" class="btn btn-ghost btn-small action-combo-clear" id="btn-clear-action-combo">清空</button>
+    `;
+    comboBar.classList.remove('hidden');
+    if (chatInputEl) {
+      chatInputEl.placeholder = '补充细节/台词（选填），留空则仅执行上方已选行动…';
+    }
+
+    comboBar.querySelectorAll('.action-combo-chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const num = Number(chip.dataset.optNum);
+        selectedOptionNumbers = selectedOptionNumbers.filter((n) => n !== num);
+        syncActionOptionUi();
+      });
+    });
+    const clearBtn = comboBar.querySelector('#btn-clear-action-combo');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        selectedOptionNumbers = [];
+        syncActionOptionUi();
+      });
+    }
+  }
+
   const messageList = createMessageListController({
     getChat: () => currentChat,
     messagesContainer,
@@ -204,6 +276,11 @@ export async function renderChat(container, characterId, chatId) {
     onEditResend: (...args) => handleEditResend(...args),
     onSwipe: (...args) => handleSwipe(...args),
     onBranch: (...args) => handleBranch(...args),
+    onContinue: (...args) => handleContinue(...args),
+    onActionOptionToggle: (...args) => handleActionOptionToggle(...args),
+    onActionOptionFill: (...args) => handleActionOptionFill(...args),
+    getSelectedActionOptions: () => selectedOptionNumbers,
+    onAfterRender: () => syncActionOptionUi(),
     showMemoryStatus,
     els: {
       roundJumpInput: document.getElementById('round-jump-input'),
@@ -422,13 +499,20 @@ export async function renderChat(container, characterId, chatId) {
   });
 
   sendBtn.addEventListener('click', async () => {
-    let text = input.value.trim();
+    const rawInput = input.value.trim();
+    const isMetaInput = /^[\$＄]/.test(rawInput);
+    let text = rawInput;
     if (sendController.isGenerating()) return;
     // 防竞态：后台仍有未完成的生成时禁止发送，避免与后台的 currentChat 互相覆盖
     if (currentChat.generating) {
       showMemoryStatus('上一条回复仍在后台生成中，请点 🔄 刷新查看进度或等待完成', 'info');
       return;
     }
+    if (selectedOptionNumbers.length > 0 && !isMetaInput) {
+      text = composeActionOptionMessage(selectedOptionNumbers, rawInput);
+    }
+    selectedOptionNumbers = [];
+    syncActionOptionUi();
     // 空输入 = AI 自主推演一轮：用占位指令作为 user 消息（入历史，AI 可知上一轮是它在推演）
     if (!text) {
       if (!currentChat.messages || currentChat.messages.length === 0) {
@@ -479,6 +563,30 @@ export async function renderChat(container, characterId, chatId) {
     await sendController.generate(currentChat.messages.length - 1, { webSearchRef });
   });
 
+  function handleActionOptionToggle(num) {
+    if (sendController.isGenerating()) return;
+    const idx = selectedOptionNumbers.indexOf(num);
+    if (idx === -1) selectedOptionNumbers.push(num);
+    else selectedOptionNumbers.splice(idx, 1);
+    syncActionOptionUi();
+  }
+
+  function handleActionOptionFill(optText) {
+    if (!optText) return;
+    const cur = input.value.trim();
+    input.value = cur ? `${cur}\n${optText}` : optText;
+    chatDrafts.set(draftKey, input.value);
+    adjustInputHeight();
+    updateInputCounter();
+    input.focus();
+  }
+
+  async function handleContinue(assistantIndex) {
+    selectedOptionNumbers = [];
+    syncActionOptionUi();
+    await sendController.continue(assistantIndex);
+  }
+
   async function handleRefresh(assistantIndex) {
     if (sendController.isGenerating()) {
       alert('请等待当前生成完成后再刷新');
@@ -510,6 +618,8 @@ export async function renderChat(container, characterId, chatId) {
     // 不删除这条回复。最近一轮还在原文窗口内、尚未进入短期记忆。
     // 旧正文收进候选，新稿写回同一条消息。
     const assistantMsg = currentChat.messages[assistantIndex];
+    selectedOptionNumbers = [];
+    syncActionOptionUi();
     beginNewSwipe(assistantMsg);
     assistantMsg.content = 'AI 正在输入…';
     syncActiveSwipe(assistantMsg);
@@ -540,6 +650,7 @@ export async function renderChat(container, characterId, chatId) {
     const msg = currentChat.messages[assistantIndex];
     const next = activeSwipeIndex(msg) + dir;
     if (!activateSwipe(msg, next)) return;
+    selectedOptionNumbers = [];
     await saveChat(currentChat);
     renderMessages(false);
   }
@@ -643,6 +754,7 @@ export async function renderChat(container, characterId, chatId) {
         timestamp: new Date().toISOString()
       });
     }
+    selectedOptionNumbers = [];
     await saveChat(currentChat);
     renderMessages();
   });

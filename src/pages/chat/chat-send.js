@@ -12,6 +12,7 @@ import {
   shouldRunMemoryRecall, RECENT_RAW_TURNS, turnIdOf
 } from '../../services/memory-engine.js';
 import { buildActionOptionContext } from '../../services/action-options.js';
+import { prepareContinueBase, buildContinueMessages, mergeContinuationText } from '../../services/continue-helper.js';
 import { updateGenerationForeground } from '../../services/foreground.js';
 import { ensurePollinationsAnchors } from '../../services/image-gen.js';
 import { countTokens } from '../../utils/tokenizer.js';
@@ -20,7 +21,7 @@ import { normalizePollinationsUrls, extractImageSeeds, hydrateGeneratedImages } 
 import { renderMarkdown, renderAssistantDisplay } from './chat-markdown.js';
 import { appendMessage } from './chat-message-ui.js';
 import {
-  activeSwipeIndex, syncActiveSwipe, rollbackNewSwipe, markActiveSwipeAborted
+  activeSwipeIndex, syncActiveSwipe, rollbackNewSwipe, markActiveSwipeAborted, clearActiveSwipeAborted
 } from './chat-swipes.js';
 import {
   getAllRounds, getLeadingGreeting, getLastOutputHeading
@@ -291,118 +292,12 @@ export function createSendController(deps) {
             if (contentEl) contentEl.classList.remove('streaming-cursor');
             if (!aborted) {
               assistantMsg.content = fullContent || assistantMsg.content;
-              // 修正 AI 漏做的 URL 编码，避免插图链接因含空格被 markdown 截断
-              assistantMsg.content = normalizePollinationsUrls(assistantMsg.content);
-              // 方向一·思维链闭合兜底：V4 常漏 </思考>，在第一个正文模块(>###)前补上，保证折叠解析与 few-shot 样本格式正确（纯本地字符串处理，不调 AI、不费 token）
-              if (assistantMsg.content.includes('<思考>') && !assistantMsg.content.includes('</思考>')) {
-                const thinkingBodyStart = assistantMsg.content.indexOf('>###');
-                if (thinkingBodyStart !== -1) {
-                  assistantMsg.content = assistantMsg.content.slice(0, thinkingBodyStart) + '</思考>\n\n' + assistantMsg.content.slice(thinkingBodyStart);
-                }
-              }
-              if (contentEl) {
-                contentEl.innerHTML = renderMarkdown(assistantMsg.content);
-              }
-
-              // 检查是否漏掉了输出格式最后一个模块，若开启自动补全则自动补全（元指令轮无格式，跳过）
-              const config = await getConfig();
-              const lastHeading = getLastOutputHeading(resolveCardPrompt(character, config, 'outputFormat'));
-              if (!isMeta && config.behavior?.autoCompleteLastModule && lastHeading && !assistantMsg.content.includes('>### ' + lastHeading)) {
-                try {
-                  await updateGenerationForeground({ title: 'AI 回复不完整', text: '正在补全缺失模块…' });
-                  // 补全走副 API（机械补写任务，稳定便宜）
-                  // 过滤思维链预填充条：它带 prefix:true，DeepSeek 官方端点只允许 prefix 出现在最后一条，
-                  // 夹在这条 assistant 正文前面会被直接拒收（副 API 是非 DeepSeek 时过滤也无害）
-                  const completionMessages = messages.filter(m => !(m.role === 'assistant' && m.prefix === true && m.content === THINKING_PREFILL));
-                  const continuation = await sendChat([
-                    ...completionMessages,
-                    { role: 'assistant', content: assistantMsg.content },
-                    { role: 'user', content: `你上一条回复漏掉了“${lastHeading}”模块。请不要重复正文，直接补输出该模块的完整内容。` }
-                  ], { api: resolveMemoryApi(config.api), usageContext: { characterId: character.id, characterName: character.name, kind: 'chat' } });
-                  if (continuation) {
-                    let extra = continuation.trim();
-                    const marker = '>### ' + lastHeading;
-                    const markerIndex = extra.indexOf(marker);
-                    if (markerIndex !== -1) {
-                      extra = extra.slice(markerIndex);
-                    }
-                    assistantMsg.content += '\n\n' + extra;
-                    if (contentEl) {
-                      const follow = isNearBottom(messagesContainer);
-                      contentEl.innerHTML = renderMarkdown(assistantMsg.content);
-                      if (follow) scrollToBottom(messagesContainer);
-                    }
-                  }
-                } catch (e) {
-                  console.warn('补全缺失模块失败:', e);
-                }
-              }
-
-              // 插图种子归档：扫描本轮回复中的插图 URL，自动维护种子档案（本地正则，不调 AI；元指令轮跳过）
-              // 插图种子归档：只登记新角色（基准锁定），已有角色的 seed 永不覆盖——
-              // AI 按规则从档案基准做 1-20 偏移让构图随剧情变，档案本身保持基准不漂移
-              const foundSeeds = isMeta ? [] : extractImageSeeds(assistantMsg.content);
-              if (foundSeeds.length > 0) {
-                if (!chat.seedArchive) chat.seedArchive = {};
-                let archiveChanged = false;
-                for (const { name, seed } of foundSeeds) {
-                  if (chat.seedArchive[name]) continue; // 已登记（含旧数值形态）→ 锁定不覆盖
-                  chat.seedArchive[name] = { seed, anchor: '' };
-                  archiveChanged = true;
-                }
-                if (archiveChanged) await saveChat(chat).catch(() => {});
-              }
-
-              // 免费生图记忆：pollinations URL 机械拼入英文外貌锚点（锁脸）。元指令轮跳过
-              // 快路径为纯字符串处理；仅某角色首次出图时需一次副 API 提取（几秒，一次性）
-              if (!isMeta && await ensurePollinationsAnchors(assistantMsg, chat, character).catch(() => false)) {
-                await saveChat(chat).catch(() => {});
-                if (contentEl && contentEl.isConnected) {
-                  contentEl.innerHTML = renderMarkdown(assistantMsg.content);
-                }
-              }
-              // 正文到此定稿（含补模块、锚点）。先写回这一稿，后台出图才不会写错槽。
-              syncActiveSwipe(assistantMsg);
-
-              // 付费插图（seedream/grok/gemini）：检测到 seedream:// 标记则自动生成
-              // 先把插图位置原地换成生成进度占位——此时标记渲染为"点击生成"按钮，不替换会误导用户、还可能被重复点击
-              // manual 手动模式不自动生成：保留"点击生成"按钮，由用户点击后走手动面板
-              const cfgForAuto = await getConfig().catch(() => ({}));
-              // 元指令轮视同 manual：不自动生成插图、不入插图队列
-              const isManualMode = isMeta || ((cfgForAuto.image && cfgForAuto.image.provider) || '') === 'manual';
-              if (contentEl && !isManualMode) {
-                const autoGenBtn = contentEl.querySelector('.img-seedream-gen');
-                if (autoGenBtn) showSeedreamLoading(autoGenBtn);
-              }
-              // 插图生成入后台串行队列，不再 await——出图期间即可发送下一条。
-              // 完成时若气泡还在当前渲染里就原地更新；已被重建（用户又发了消息）则不动 DOM，
-              // 内容已落盘，下次自然渲染时图片会出现（避免重建导致正在流式的下一条回复冻结）
-              if (!isManualMode) {
-                const illustrationChatId = chat.id;
-                syncActiveSwipe(assistantMsg);
-                const imageSwipe = lockedSwipe;
-                enqueueIllustrationTask(async () => {
-                  const freshChat = getChat();
-                  if (!freshChat || freshChat.id !== illustrationChatId) return;
-                  const result = await processSeedreamMarkers(assistantMsg, imageSwipe);
-                  // 用户已经翻到别的稿时，图写在发起稿上，不改当前画面
-                  if (!result || !result.visible) return;
-                  // contentEl 可能已随回复完成时的 renderMessages 重建而失效：
-                  // 优先原地更新，失效则按 timestamp 找回当前 DOM 里的气泡再更新；
-                  // 气泡不在当前渲染分页（用户翻到了很早的消息）就不动 DOM，内容已落盘
-                  let target = (contentEl && contentEl.isConnected) ? contentEl : null;
-                  if (!target) {
-                    const node = messagesContainer.querySelector(`.message[data-timestamp="${assistantMsg.timestamp}"]`);
-                    target = node ? node.querySelector('.message-content') : null;
-                  }
-                  if (target) {
-                    const follow = isNearBottom(messagesContainer);
-                    target.innerHTML = renderAssistantDisplay(extractThinkingForDisplay(assistantMsg.content).body);
-                    hydrateGeneratedImages(target);
-                    if (follow) scrollToBottom(messagesContainer);
-                  }
-                });
-              }
+              await finalizeAssistantReply(chat, assistantMsg, {
+                messages,
+                isMeta,
+                contentEl,
+                lockedSwipe
+              });
 
               // 最新一轮仍可刷新，不入库；只整理已经退出最近一轮窗口的定稿
               const shouldArchive = character.memoryEnabled !== false && !isMeta;
@@ -477,6 +372,282 @@ export function createSendController(deps) {
     }
   }
 
+  /** 回复定稿后处理：URL 编码修正、思维链闭合、末模块补全、种子归档、锚点拼接与付费插图入队。 */
+  async function finalizeAssistantReply(chat, assistantMsg, { messages, isMeta, contentEl, lockedSwipe }) {
+    assistantMsg.content = normalizePollinationsUrls(assistantMsg.content);
+    if (assistantMsg.content.includes('<思考>') && !assistantMsg.content.includes('</思考>')) {
+      const thinkingBodyStart = assistantMsg.content.indexOf('>###');
+      if (thinkingBodyStart !== -1) {
+        assistantMsg.content = assistantMsg.content.slice(0, thinkingBodyStart) + '</思考>\n\n' + assistantMsg.content.slice(thinkingBodyStart);
+      }
+    }
+    if (contentEl) {
+      contentEl.innerHTML = renderMarkdown(assistantMsg.content);
+    }
+
+    const config = await getConfig();
+    const lastHeading = getLastOutputHeading(resolveCardPrompt(character, config, 'outputFormat'));
+    if (!isMeta && config.behavior?.autoCompleteLastModule && lastHeading && !assistantMsg.content.includes('>### ' + lastHeading)) {
+      try {
+        await updateGenerationForeground({ title: 'AI 回复不完整', text: '正在补全缺失模块…' });
+        const completionMessages = messages.filter(m => !(m.role === 'assistant' && m.prefix === true && m.content === THINKING_PREFILL));
+        const continuation = await sendChat([
+          ...completionMessages,
+          { role: 'assistant', content: assistantMsg.content },
+          { role: 'user', content: `你上一条回复漏掉了“${lastHeading}”模块。请不要重复正文，直接补输出该模块的完整内容。` }
+        ], { api: resolveMemoryApi(config.api), usageContext: { characterId: character.id, characterName: character.name, kind: 'chat' } });
+        if (continuation) {
+          let extra = continuation.trim();
+          const marker = '>### ' + lastHeading;
+          const markerIndex = extra.indexOf(marker);
+          if (markerIndex !== -1) {
+            extra = extra.slice(markerIndex);
+          }
+          assistantMsg.content += '\n\n' + extra;
+          if (contentEl) {
+            const follow = isNearBottom(messagesContainer);
+            contentEl.innerHTML = renderMarkdown(assistantMsg.content);
+            if (follow) scrollToBottom(messagesContainer);
+          }
+        }
+      } catch (e) {
+        console.warn('补全缺失模块失败:', e);
+      }
+    }
+
+    const foundSeeds = isMeta ? [] : extractImageSeeds(assistantMsg.content);
+    if (foundSeeds.length > 0) {
+      if (!chat.seedArchive) chat.seedArchive = {};
+      let archiveChanged = false;
+      for (const { name, seed } of foundSeeds) {
+        if (chat.seedArchive[name]) continue;
+        chat.seedArchive[name] = { seed, anchor: '' };
+        archiveChanged = true;
+      }
+      if (archiveChanged) await saveChat(chat).catch(() => {});
+    }
+
+    if (!isMeta && await ensurePollinationsAnchors(assistantMsg, chat, character).catch(() => false)) {
+      await saveChat(chat).catch(() => {});
+      if (contentEl && contentEl.isConnected) {
+        contentEl.innerHTML = renderMarkdown(assistantMsg.content);
+      }
+    }
+    syncActiveSwipe(assistantMsg);
+
+    const cfgForAuto = await getConfig().catch(() => ({}));
+    const isManualMode = isMeta || ((cfgForAuto.image && cfgForAuto.image.provider) || '') === 'manual';
+    if (contentEl && !isManualMode) {
+      const autoGenBtn = contentEl.querySelector('.img-seedream-gen');
+      if (autoGenBtn) showSeedreamLoading(autoGenBtn);
+    }
+    if (!isManualMode) {
+      const illustrationChatId = chat.id;
+      syncActiveSwipe(assistantMsg);
+      const imageSwipe = lockedSwipe;
+      enqueueIllustrationTask(async () => {
+        const freshChat = getChat();
+        if (!freshChat || freshChat.id !== illustrationChatId) return;
+        const result = await processSeedreamMarkers(assistantMsg, imageSwipe);
+        if (!result || !result.visible) return;
+        let target = (contentEl && contentEl.isConnected) ? contentEl : null;
+        if (!target) {
+          const node = messagesContainer.querySelector(`.message[data-timestamp="${assistantMsg.timestamp}"]`);
+          target = node ? node.querySelector('.message-content') : null;
+        }
+        if (target) {
+          const follow = isNearBottom(messagesContainer);
+          target.innerHTML = renderAssistantDisplay(extractThinkingForDisplay(assistantMsg.content).body);
+          hydrateGeneratedImages(target);
+          if (follow) scrollToBottom(messagesContainer);
+        }
+      });
+    }
+  }
+
+  /** 一键续写：沿用最新一条 assistant 消息末尾继续往下写，不新开轮次、不污染记忆计数。 */
+  async function continueAssistantMessage(assistantIndex) {
+    if (isGenerating) return;
+    const chat = getChat();
+    if (!chat || chat.generating) {
+      showMemoryStatus('上一条回复仍在后台生成中，请稍候', 'info');
+      return;
+    }
+    if (assistantIndex !== chat.messages.length - 1) {
+      showMemoryStatus('只能续写最近一条回复', 'info');
+      return;
+    }
+    const assistantMsg = chat.messages[assistantIndex];
+    if (!assistantMsg || assistantMsg.role !== 'assistant') return;
+    const prevContent = String(assistantMsg.content || '');
+    if (!prevContent.trim() || prevContent === 'AI 正在输入…' || /^（生成失败：/.test(prevContent)) {
+      showMemoryStatus('当前回复无法续写，请点刷新重新生成', 'info');
+      return;
+    }
+
+    let userIndex = -1;
+    for (let i = assistantIndex - 1; i >= 0; i--) {
+      if (chat.messages[i] && chat.messages[i].role === 'user') {
+        userIndex = i;
+        break;
+      }
+    }
+
+    const { baseContent, strippedOptions } = prepareContinueBase(prevContent);
+    let isMeta = false;
+
+    isGenerating = true;
+    sendBtn.classList.add('hidden');
+    chat.generating = true;
+    saveChat(chat).catch(() => {});
+    writeChatPing(characterId, chat.id).catch(() => {});
+    generatingPingTimer = setInterval(() => {
+      writeChatPing(characterId, chat.id).catch(() => {});
+    }, 5000);
+
+    const node = messagesContainer.querySelector(`.message[data-timestamp="${assistantMsg.timestamp}"]`);
+    const contentEl = node ? node.querySelector('.message-content') : null;
+    const lockedSwipe = activeSwipeIndex(assistantMsg);
+
+    try {
+      await updateGenerationForeground({ title: 'AI 正在续写', text: '请耐心等待…' });
+
+      let baseMessages;
+      if (userIndex !== -1) {
+        const history = chat.messages.slice(0, userIndex);
+        const userMsg = chat.messages[userIndex];
+        isMeta = userMsg.meta === true;
+        let rawWindowOverride = RECENT_RAW_TURNS;
+        if (character.memoryEnabled !== false && !isMeta && chat.memory) {
+          const pastRounds = getAllRounds(history).filter((r) => !r.user.meta);
+          rawWindowOverride = getMemoryRawWindowSize(chat.memory, pastRounds);
+        }
+        baseMessages = await buildMessages(
+          character,
+          history,
+          userMsg.content,
+          chat.memory,
+          chat.seedArchive,
+          {
+            metaCommand: isMeta,
+            authorNote: chat.authorNote || null,
+            rawWindowOverride
+          }
+        );
+      } else {
+        baseMessages = await buildMessages(
+          character,
+          [],
+          '请接着开场白继续推进剧情。',
+          chat.memory,
+          chat.seedArchive,
+          { authorNote: chat.authorNote || null }
+        );
+      }
+
+      const continueMessages = buildContinueMessages(baseMessages, baseContent, strippedOptions);
+
+      const config = await getConfig();
+      if (config.debug?.previewBeforeSend) {
+        const shouldSend = await showSendPreview(continueMessages);
+        if (!shouldSend) {
+          assistantMsg.content = prevContent;
+          syncActiveSwipe(assistantMsg);
+          renderMessages(false);
+          await saveChat(chat).catch(() => {});
+          finishGeneration(chat);
+          stopBtn.classList.add('hidden');
+          await updateGenerationForeground({ title: '已取消续写', text: '用户取消了 AI 请求' });
+          setTimeout(() => {
+            updateGenerationForeground({ title: '酒馆正在运行', text: '保持后台连接中…' }).catch(() => {});
+          }, 4000);
+          return;
+        }
+      }
+
+      if (contentEl) contentEl.classList.add('streaming-cursor');
+      scrollToBottom(messagesContainer);
+      setRequestSessionId(chat.id);
+      stopBtn.classList.remove('hidden');
+
+      let rawCont = '';
+      let receivedChunk = false;
+      let lastSaveTime = 0;
+      const SAVE_INTERVAL = 1000;
+
+      await new Promise((resolve) => {
+        abortController = sendChatStream(continueMessages, {
+          onChunk: (chunk) => {
+            receivedChunk = true;
+            rawCont += chunk;
+            assistantMsg.content = mergeContinuationText(baseContent, rawCont, { strippedOptions });
+            syncActiveSwipe(assistantMsg);
+            if (contentEl) {
+              const follow = isNearBottom(messagesContainer);
+              contentEl.innerHTML = renderAssistantDisplay(extractThinkingForDisplay(assistantMsg.content).body);
+              if (follow) scrollToBottom(messagesContainer);
+            }
+            const now = Date.now();
+            if (now - lastSaveTime > SAVE_INTERVAL) {
+              lastSaveTime = now;
+              saveChat(chat).catch(() => {});
+            }
+          },
+          onError: async (message) => {
+            if (contentEl) contentEl.classList.remove('streaming-cursor');
+            if (!receivedChunk) {
+              assistantMsg.content = prevContent;
+              showMemoryStatus('续写失败：' + message, 'error');
+            } else {
+              assistantMsg.content = mergeContinuationText(baseContent, rawCont, { strippedOptions });
+              showMemoryStatus('续写中断：' + message, 'warning');
+            }
+            syncActiveSwipe(assistantMsg);
+            renderMessages(false);
+            await saveChat(chat).catch(() => {});
+            resolve();
+          },
+          onDone: async (fullContent, aborted) => {
+            if (contentEl) contentEl.classList.remove('streaming-cursor');
+            const finalRaw = fullContent || rawCont;
+            if (!aborted) {
+              assistantMsg.content = mergeContinuationText(baseContent, finalRaw, { strippedOptions });
+              clearActiveSwipeAborted(assistantMsg);
+              await finalizeAssistantReply(chat, assistantMsg, {
+                messages: continueMessages,
+                isMeta,
+                contentEl,
+                lockedSwipe
+              });
+              await updateGenerationForeground({ title: 'AI 续写完成', text: '可以去查看了' });
+            } else {
+              assistantMsg.content = receivedChunk
+                ? mergeContinuationText(baseContent, rawCont, { strippedOptions })
+                : prevContent;
+              markActiveSwipeAborted(assistantMsg);
+              syncActiveSwipe(assistantMsg);
+              await updateGenerationForeground({ title: 'AI 续写已停止', text: '已保留已输出内容' });
+            }
+            renderMessages(isNearBottom(messagesContainer));
+            await saveChat(chat).catch(() => {});
+            resolve();
+          }
+        }, { characterId: character.id, characterName: character.name, kind: 'chat' });
+      });
+    } catch (error) {
+      assistantMsg.content = prevContent;
+      syncActiveSwipe(assistantMsg);
+      showMemoryStatus('续写失败：' + (error.message || String(error)), 'error');
+      renderMessages(false);
+      await saveChat(chat).catch(() => {});
+    } finally {
+      finishGeneration(chat);
+      setTimeout(() => {
+        updateGenerationForeground({ title: '酒馆正在运行', text: '保持后台连接中…' }).catch(() => {});
+      }, 4000);
+    }
+  }
+
   function finishGeneration(chat) {
     isGenerating = false;
     sendBtn.classList.remove('hidden');
@@ -496,6 +667,7 @@ export function createSendController(deps) {
 
   return {
     generate: generateResponseForUserMessage,
+    continue: continueAssistantMessage,
     stop() {
       if (abortController) {
         abortController.abort();

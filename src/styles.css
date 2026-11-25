@@ -3273,3 +3273,170 @@ details.form-section > summary.form-section-title:hover {
   color: var(--text-primary);
   font-size: 0.9rem;
 }
+
+
+/* ------------------------------------------------------------------ */
+/* 交互式多选行动选项卡片 + 底部组合条                                */
+/* ------------------------------------------------------------------ */
+.action-options-picker {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+
+.action-options-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.action-options-picker-hint {
+  font-size: 0.74rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.action-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.action-option-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.action-option-card {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.action-option-card:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-hover);
+}
+
+.action-option-card.selected {
+  border-color: var(--accent);
+  background: var(--accent-softer);
+}
+
+.action-option-order {
+  display: none;
+  flex-shrink: 0;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--accent-light);
+}
+
+.action-option-card.selected .action-option-order {
+  display: inline-block;
+}
+
+.action-option-num {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.action-option-card.selected .action-option-num {
+  color: var(--accent-light);
+}
+
+.action-option-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.action-option-fill-btn {
+  flex-shrink: 0;
+  min-width: 34px;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.action-option-fill-btn:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.action-combo-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--accent-softer);
+  border: 1px solid var(--accent-border);
+}
+
+.action-combo-chips {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.action-combo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.action-combo-chip:hover {
+  border-color: var(--accent);
+}
+
+.action-combo-chip-x {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.action-combo-clear {
+  flex-shrink: 0;
+}

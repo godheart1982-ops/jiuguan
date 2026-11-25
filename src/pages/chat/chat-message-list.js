@@ -28,6 +28,11 @@ export function createMessageListController(ctx) {
     onEditResend,
     onSwipe,
     onBranch,
+    onContinue,
+    onActionOptionToggle,
+    onActionOptionFill,
+    getSelectedActionOptions,
+    onAfterRender,
     showMemoryStatus,
     els
   } = ctx;
@@ -114,13 +119,20 @@ export function createMessageListController(ctx) {
         renderMessages,
         onEditResend,
         onSwipe,
-        onBranch
+        onBranch,
+        {
+          onContinue,
+          onActionOptionToggle,
+          onActionOptionFill,
+          getSelectedActionOptions
+        }
       );
     }
     hydrateGeneratedImages(messagesContainer);
     if (scrollToEnd) scrollToBottom(messagesContainer);
     updateRoundJumpInfo();
     refreshSearchAfterRender();
+    if (onAfterRender) onAfterRender();
   }
 
   function loadEarlierMessages() {

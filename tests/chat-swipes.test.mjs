@@ -12,6 +12,7 @@ import {
   readSwipeContent,
   syncActiveSwipe,
   markActiveSwipeAborted,
+  clearActiveSwipeAborted,
   isActiveSwipeAborted,
   imagePathsLostByDiscard
 } from '../src/pages/chat/chat-swipes.js';
@@ -133,4 +134,17 @@ test('换稿时记忆调取按当前正文重算', () => {
   assert.equal(syncPendingRecalls(memory, '正文\n记忆调取：#2'), false);
   assert.equal(syncPendingRecalls(memory, '这稿没有调取'), true);
   assert.equal(memory.pendingRecalls, undefined);
+});
+
+test('续写完成后清除当前稿的中止标记，不影响其他候选稿', () => {
+  const msg = { content: '第一稿半截', aborted: true };
+  beginNewSwipe(msg);
+  msg.content = '第二稿半截';
+  syncActiveSwipe(msg);
+  markActiveSwipeAborted(msg);
+  assert.equal(isActiveSwipeAborted(msg), true);
+  clearActiveSwipeAborted(msg);
+  assert.equal(isActiveSwipeAborted(msg), false);
+  activateSwipe(msg, 0);
+  assert.equal(isActiveSwipeAborted(msg), true);
 });
