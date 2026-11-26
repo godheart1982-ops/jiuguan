@@ -11,7 +11,7 @@ import { insertAuthorNote, shouldInjectAuthorNote, storyUserTurnCount } from './
 import { resolveWorldBookInjectionParts } from './world-book.js';
 import { assembleCardDescription, buildOffscreenRosterBlock } from './card-modules.js';
 import { resolveCardPrompt } from './prompt-library.js';
-import { formatCurrentMemoryState, formatRecentMemoryIndexes, formatRecalledTurns, RECENT_RAW_TURNS } from './memory-engine.js';
+import { formatCurrentMemoryState, formatRecentMemoryIndexes, formatRecalledTurns, RECENT_RAW_TURNS, sceneTimeFromText } from './memory-engine.js';
 import { formatLongTermMemories } from './memory-long-term.js';
 
 // 思维链预填充文本：开启后追加为 messages 最后一条 assistant 消息，强制模型从此处续写
@@ -171,7 +171,13 @@ export async function buildMessages(character, historyMessages, userMessage, mem
     ...recentHistory.map((m) => String(m && m.content || '')),
     recallMentionText
   ].filter(Boolean).join('\n');
-  const currentStateBlock = memoryOn ? formatCurrentMemoryState(memory, { mentionText: stateMentionText }) : '';
+  const latestAssistantForState = [...recentHistory].reverse().find((m) => m && m.role === 'assistant');
+  const latestSceneTime = sceneTimeFromText(latestAssistantForState && latestAssistantForState.content);
+  const currentStateBlock = memoryOn ? formatCurrentMemoryState(memory, {
+    mentionText: stateMentionText,
+    promiseMentionText: String(userMessage || ''),
+    currentSceneTime: latestSceneTime
+  }) : '';
   if (currentStateBlock) systemContent += '\n\n' + currentStateBlock;
   const recentIndexBlock = memoryOn ? formatRecentMemoryIndexes(memory, {
     recalledTurns: options && options.recalledTurns,

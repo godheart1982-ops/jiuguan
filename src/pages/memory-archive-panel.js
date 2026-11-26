@@ -44,6 +44,7 @@ export function getArchivePage(archive, requestedPage = 1, pageSize = ARCHIVE_PA
 
 export function renderMemoryArchivePanel(options) {
   const { tab, state, archive, longTerm = [], recallLog, contentEl, chat, character, onChange, onData, rerender } = options;
+  const onStatus = options.onStatus || (() => {});
 
   function renderState() {
     const characters = state.characters.map((c, i) => `
@@ -109,14 +110,22 @@ export function renderMemoryArchivePanel(options) {
     contentEl.querySelector('#state-add-intel').addEventListener('click', () => { state.intel.push({ id: `intel-${Date.now()}`, text: '', knownBy: [] }); onChange(); rerender(); });
     contentEl.querySelector('#state-rebuild').addEventListener('click', async (e) => {
       if (!archive.length || !confirm('按全部已入库原文重新计算当前状态？现有手动状态修改会被覆盖。')) return;
-      e.target.disabled = true;
+      const btn = e.currentTarget;
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '重建中…';
+      onStatus('正在准备从原文重建状态…', 'info', { key: 'memory-archive' });
       try {
         chat.memory.state = state;
         chat.memory.archive = archive;
-        await rebuildMemoryState(chat, character);
+        await rebuildMemoryState(chat, character, { onStatus });
         onData(chat.memory.state, chat.memory.archive, chat.memory.recallLog, chat.memory.longTermSummaries);
         rerender();
-      } catch (err) { alert('状态重建失败：' + err.message); e.target.disabled = false; }
+      } catch (err) {
+        onStatus('状态重建失败：' + err.message, 'error', { key: 'memory-archive' });
+        btn.disabled = false;
+        btn.textContent = origText;
+      }
     });
   }
 
@@ -171,7 +180,11 @@ export function renderMemoryArchivePanel(options) {
     contentEl.querySelector('#archive-page')?.addEventListener('change', (e) => goToPage(e.target.value));
     contentEl.querySelectorAll('.archive-reindex').forEach((el) => el.addEventListener('click', async () => {
       const entry = archive[el.dataset.i];
+      const key = `reindex-${entry.turnId || el.dataset.i}`;
+      const origText = el.textContent;
       el.disabled = true;
+      el.textContent = '重建中…';
+      onStatus(`正在重建第 ${entry.round ?? '—'} 轮索引…`, 'info', { key });
       try {
         const raw = readArchivedTurn(chat.messages, entry);
         if (!raw) throw new Error('原消息已删除，无法重建索引');
@@ -184,22 +197,41 @@ export function renderMemoryArchivePanel(options) {
         entry.revision = result.entry.revision;
         onChange();
         rerender();
-      } catch (err) { alert('索引重建失败：' + err.message); el.disabled = false; }
+        onStatus(`第 ${entry.round ?? '—'} 轮索引重建完成`, 'success', { key });
+      } catch (err) {
+        onStatus(`第 ${entry.round ?? '—'} 轮索引重建失败：${err.message}`, 'error', { key });
+        el.disabled = false;
+        el.textContent = origText;
+      }
     }));
     contentEl.querySelector('#archive-fill-times').addEventListener('click', () => {
       const filled = fillMissingIndexSceneTimes(archive, chat.messages);
       if (filled) { onChange(); rerender(); }
-      alert(filled ? `已从原文补齐 ${filled} 条索引时间` : '没有可从原文补齐的缺失时间');
+      onStatus(filled ? `已从原文补齐 ${filled} 条索引时间` : '没有可从原文补齐的缺失时间', filled ? 'success' : 'info', { key: 'memory-archive' });
     });
     contentEl.querySelector('#archive-catchup').addEventListener('click', async (e) => {
-      e.target.disabled = true;
+      const btn = e.currentTarget;
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '整理中…';
+      onStatus('正在检查并整理待整理轮次…', 'info', { key: 'memory-archive' });
       try {
         chat.memory.state = state;
         chat.memory.archive = archive;
-        await catchUpMemoryArchive(chat, character, getAllRounds(chat.messages).filter((r) => !r.user.meta), { greeting: getLeadingGreeting(chat.messages) });
+        const processed = await catchUpMemoryArchive(chat, character, getAllRounds(chat.messages).filter((r) => !r.user.meta), {
+          greeting: getLeadingGreeting(chat.messages),
+          onStatus
+        });
+        if (!processed) {
+          onStatus('当前没有待整理的轮次', 'success', { key: 'memory-archive', duration: 2500 });
+        }
         onData(chat.memory.state, chat.memory.archive, chat.memory.recallLog, chat.memory.longTermSummaries);
         rerender();
-      } catch (err) { alert('整理失败：' + err.message); e.target.disabled = false; }
+      } catch (err) {
+        onStatus('整理失败：' + err.message, 'error', { key: 'memory-archive' });
+        btn.disabled = false;
+        btn.textContent = origText;
+      }
     });
   }
 
@@ -241,24 +273,42 @@ export function renderMemoryArchivePanel(options) {
       rerender();
     }));
     contentEl.querySelectorAll('.long-rebuild').forEach((el) => el.addEventListener('click', async () => {
+      const origText = el.textContent;
       el.disabled = true;
+      el.textContent = '重建中…';
+      onStatus('正在重建长期记忆…', 'info', { key: 'memory-long' });
       try {
         chat.memory.archive = archive;
         chat.memory.longTermSummaries = longTerm;
-        await rebuildLongTermMemory(chat, longTerm[Number(el.dataset.i)].id);
+        await rebuildLongTermMemory(chat, longTerm[Number(el.dataset.i)].id, { onStatus });
         onData(state, archive, recallLog, chat.memory.longTermSummaries);
         rerender();
-      } catch (err) { alert('长期记忆重建失败：' + err.message); el.disabled = false; }
+      } catch (err) {
+        onStatus('长期记忆重建失败：' + err.message, 'error', { key: 'memory-long' });
+        el.disabled = false;
+        el.textContent = origText;
+      }
     }));
     contentEl.querySelector('#long-catchup').addEventListener('click', async (e) => {
-      e.target.disabled = true;
+      const btn = e.currentTarget;
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '整理中…';
+      onStatus('正在检查并整理长期记忆…', 'info', { key: 'memory-long' });
       try {
         chat.memory.archive = archive;
         chat.memory.longTermSummaries = longTerm;
-        await catchUpLongTermMemories(chat);
+        const generated = await catchUpLongTermMemories(chat, { onStatus });
+        if (!generated) {
+          onStatus('当前没有待压缩的长期记忆', 'success', { key: 'memory-long', duration: 2500 });
+        }
         onData(state, archive, recallLog, chat.memory.longTermSummaries);
         rerender();
-      } catch (err) { alert('长期记忆整理失败：' + err.message); e.target.disabled = false; }
+      } catch (err) {
+        onStatus('长期记忆整理失败：' + err.message, 'error', { key: 'memory-long' });
+        btn.disabled = false;
+        btn.textContent = origText;
+      }
     });
   }
 
@@ -288,14 +338,23 @@ export function renderMemoryArchivePanel(options) {
     contentEl.querySelector('#recall-test-btn').addEventListener('click', async (e) => {
       const input = contentEl.querySelector('#recall-test-input').value.trim();
       if (!input) return;
-      e.target.disabled = true;
+      const btn = e.currentTarget;
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '测试中…';
+      onStatus('正在测试历史召回…', 'info', { key: 'recall' });
       try {
         const result = await selectMemoryRecalls({ archive, state, recallLog: [] }, { userMessage: input, currentState: state });
         contentEl.querySelector('#recall-test-result').innerHTML = result.recalls.length
           ? result.recalls.map((r) => `<div class="memory-card">第${r.entry.round ?? '—'}轮「${escapeHtml(r.entry.index?.title || '')}」<br><span style="color:#999;">${escapeHtml(r.reason)}</span></div>`).join('')
           : '<div class="memory-empty">没有相关历史</div>';
-      } catch (err) { alert('召回测试失败：' + err.message); }
-      e.target.disabled = false;
+        onStatus(result.recalls.length ? `召回测试完成：命中 ${result.recalls.length} 轮` : '召回测试完成：未命中相关历史', 'success', { key: 'recall' });
+      } catch (err) {
+        onStatus('召回测试失败：' + err.message, 'error', { key: 'recall' });
+      } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+      }
     });
   }
 

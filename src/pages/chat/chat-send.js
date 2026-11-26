@@ -178,6 +178,8 @@ export function createSendController(deps) {
             await saveChat(chat).catch(() => {});
             if (recalledTurns.length) {
               showMemoryStatus('已召回历史轮次：' + recalledTurns.map((r) => `第${r.entry.round ?? '—'}轮`).join('、'), 'success');
+            } else {
+              showMemoryStatus('历史记忆核对完成（无需额外召回）', 'success', { duration: 2500 });
             }
           } catch (e) {
             console.warn('历史记忆召回失败，继续使用当前状态与最近原文:', e);

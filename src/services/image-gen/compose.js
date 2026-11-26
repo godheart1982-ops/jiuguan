@@ -4,7 +4,8 @@ import { resolveMemoryApi } from '../api-memory.js';
 import { getCharacterModules } from '../card-modules.js';
 import {
   isStrictMechanicalProvider, generateSeedreamImage, generateWanxImage,
-  generateGrokImage, generateGrokWebImage, generateGeminiImage, isModerationError
+  generateGrokImage, generateGrokWebImage, generateGeminiImage,
+  generateOpenAIImage, isModerationError
 } from './providers.js';
 import { anchorTextOf, extractNamedAppearanceAnchor, resolveAnchorRefImages } from './anchors.js';
 import {
@@ -295,6 +296,10 @@ function resolveImageGenerator(config) {
   if (imgCfg.provider === 'gemini') {
     const gm = imgCfg.gemini || {};
     return (prompt) => generateGeminiImage({ ...gm, prompt });
+  }
+  if (imgCfg.provider === 'openai') {
+    const oa = imgCfg.openai || {};
+    return (prompt) => generateOpenAIImage({ ...oa, prompt });
   }
   if (imgCfg.provider === 'grok') {
     const gk = imgCfg.grok || {};

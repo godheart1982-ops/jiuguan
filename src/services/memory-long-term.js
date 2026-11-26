@@ -253,6 +253,7 @@ export async function rebuildLongTermMemory(chat, summaryId, hooks = {}) {
   summary.createdAt = existing.createdAt || summary.createdAt;
   chat.memory.longTermSummaries[index] = summary;
   await saveChat(chat).catch(() => {});
+  hooks.onStatus?.('长期记忆重建完成', 'success');
   return clone(summary);
 }
 

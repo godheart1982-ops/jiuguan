@@ -3025,13 +3025,25 @@ body::before {
 
 /* ---------- 记忆/插图状态条：进行中的脉冲点 ---------- */
 
+.memory-status-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.memory-status-stack .memory-status {
+  margin-bottom: 0;
+}
+
 .memory-status {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
-.memory-status.info::before {
+.memory-status.pending::before {
   content: '';
   width: 6px;
   height: 6px;

@@ -24,17 +24,18 @@
 //（manual = 手动网页版：App 只出提示词，用户自行到网页版生图后选图插入；
 // grokweb = 局域网自托管反代：grok.com 网页账号出的图，走 chat/completions 聊天格式）
 export function isPaidImageProvider(provider) {
-  return provider === 'seedream' || provider === 'wanx' || provider === 'grok' || provider === 'gemini' || provider === 'manual' || provider === 'grokweb';
+  return provider === 'seedream' || provider === 'wanx' || provider === 'openai' || provider === 'grok' || provider === 'gemini' || provider === 'manual' || provider === 'grokweb';
 }
 
-// 严格版机械生图：Seedream / 万相 / Gemini（无 compose，单人 only）
+// 严格版机械生图：Seedream / 万相 / Gemini / OpenAI（无 compose，单人 only）
 export function isStrictMechanicalProvider(provider) {
-  return provider === 'seedream' || provider === 'wanx' || provider === 'gemini';
+  return provider === 'seedream' || provider === 'wanx' || provider === 'gemini' || provider === 'openai';
 }
 
 // 服务商显示名（加载占位/通知栏文案用）
 export function imageProviderDisplayName(provider) {
   if (provider === 'wanx') return '万相生图';
+  if (provider === 'openai') return 'OpenAI 生图';
   if (provider === 'grok') return 'Grok 生图';
   if (provider === 'gemini') return 'Gemini 生图';
   if (provider === 'manual') return '手动网页版';
@@ -508,6 +509,142 @@ export async function generateGeminiImage({ apiKey, baseUrl, model, aspectRatio,
     .join(' ')
     .slice(0, 120);
   throw new Error(`Gemini 未返回图片数据${textSnippet ? `：${textSnippet}` : ''}`);
+}
+
+const IMAGE_MODEL_HINT_RE = /image|dall-e|gpt-image|imagen|flux|sdxl|stable-diffusion|midjourney|ideogram|recraft|seedream|wanx|kolors|cogview|qwen-image|grok-imagine|kontext|banana/i;
+
+function normalizeOpenAIBaseUrl(baseUrl) {
+  return (baseUrl || 'https://api.openai.com/v1')
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/(images\/generations|chat\/completions)$/i, '');
+}
+
+async function parseErrorMessage(resp) {
+  const errText = await resp.text().catch(() => '');
+  let errMsg = errText || `HTTP ${resp.status}`;
+  try {
+    const errJson = JSON.parse(errText);
+    errMsg = errJson?.error?.message || errJson?.message || errMsg;
+  } catch {}
+  return errMsg;
+}
+
+/**
+ * 构造 OpenAI /images/generations 请求体。
+ * gpt-image-* 模型不接受 response_format 参数（传了会报 400），仅 dall-e-* 附带 response_format: 'b64_json'。
+ */
+export function buildOpenAIImageRequestBody({ model, prompt, size, quality } = {}) {
+  const cleanModel = (model || 'gpt-image-1').trim() || 'gpt-image-1';
+  const body = {
+    model: cleanModel,
+    prompt,
+    n: 1
+  };
+  if (size && size !== 'auto') {
+    body.size = size;
+  }
+  if (quality && quality !== 'auto') {
+    body.quality = quality;
+  }
+  if (/^dall-e-/i.test(cleanModel)) {
+    body.response_format = 'b64_json';
+  }
+  return body;
+}
+
+/**
+ * 调用 OpenAI 官方或兼容中转站的 /images/generations 接口生图（收费 + 严格审核）。
+ * 返回 data URL（data:image/...;base64,...），若返回临时 URL 则自动转存为本地 data URL。
+ */
+export async function generateOpenAIImage({ baseUrl, apiKey, model, prompt, size, quality }) {
+  if (!apiKey || !apiKey.trim()) {
+    throw new Error('请先在插图设置里填写 OpenAI API Key');
+  }
+  const cleanBase = (baseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
+  const endpoint = /\/images\/generations$/i.test(cleanBase)
+    ? cleanBase
+    : `${cleanBase}/images/generations`;
+
+  const body = buildOpenAIImageRequestBody({ model, prompt, size, quality });
+
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey.trim()}`
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!resp.ok) {
+    const errMsg = await parseErrorMessage(resp);
+    throw new Error(`OpenAI 生图失败 (${resp.status}): ${errMsg}`);
+  }
+
+  const data = await resp.json();
+  const item = data?.data?.[0];
+  if (item?.b64_json) {
+    const rawFmt = (data?.output_format || 'png').toLowerCase();
+    const fmt = rawFmt === 'jpg' ? 'jpeg' : rawFmt;
+    return `data:image/${fmt};base64,${item.b64_json}`;
+  }
+  if (item?.url) {
+    return await fetchUrlAsDataUrl(item.url);
+  }
+  throw new Error('OpenAI 未返回图片数据');
+}
+
+/**
+ * 从 OpenAI 或兼容中转站 GET /models 抓取可用模型列表。
+ * 将疑似生图模型优先排在前面，返回 { all, imageLikely }。
+ */
+export async function fetchOpenAIModels({ baseUrl, apiKey }) {
+  if (!apiKey || !apiKey.trim()) {
+    throw new Error('请先填写 OpenAI API Key');
+  }
+  const cleanBase = normalizeOpenAIBaseUrl(baseUrl);
+  const endpoint = `${cleanBase}/models`;
+
+  const resp = await fetch(endpoint, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${apiKey.trim()}`
+    }
+  });
+
+  if (!resp.ok) {
+    const errMsg = await parseErrorMessage(resp);
+    throw new Error(`获取模型失败 (${resp.status}): ${errMsg}`);
+  }
+
+  const json = await resp.json();
+  const rawList = Array.isArray(json?.data)
+    ? json.data
+    : (Array.isArray(json) ? json : (Array.isArray(json?.models) ? json.models : []));
+
+  const unique = new Set();
+  for (const item of rawList) {
+    const id = typeof item === 'string' ? item.trim() : String(item?.id || item?.name || '').trim();
+    if (id) unique.add(id);
+  }
+
+  const imageLikely = [];
+  const others = [];
+  for (const id of unique) {
+    if (IMAGE_MODEL_HINT_RE.test(id)) {
+      imageLikely.push(id);
+    } else {
+      others.push(id);
+    }
+  }
+  imageLikely.sort((a, b) => a.localeCompare(b));
+  others.sort((a, b) => a.localeCompare(b));
+
+  return {
+    all: [...imageLikely, ...others],
+    imageLikely
+  };
 }
 
 // ---------- 提示词流水线（副 API） ----------

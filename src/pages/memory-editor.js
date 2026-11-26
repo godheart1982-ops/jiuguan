@@ -7,7 +7,8 @@ import { migrateChat } from '../services/migrations.js';
 import { countTokens } from '../utils/tokenizer.js';
 import { openBigTextEditor } from '../utils/big-editor.js';
 import { renderMemoryArchivePanel } from './memory-archive-panel.js';
-import { emptyMemoryState, formatCurrentMemoryState, formatRecentMemoryIndexes, syncMemoryProfiles } from '../services/memory-engine.js';
+import { createMemoryStatus } from './chat/chat-memory-ui.js';
+import { emptyMemoryState, formatCurrentMemoryState, formatRecentMemoryIndexes, syncMemoryProfiles, sceneTimeFromText } from '../services/memory-engine.js';
 import { formatLongTermMemories } from '../services/memory-long-term.js';
 import { mergeMemoryEditorSnapshots } from '../services/memory-editor-merge.js';
 
@@ -113,6 +114,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             <button class="btn btn-ghost btn-small memory-tab-btn" id="tab-supplement" data-tab="supplement">补充设定</button>
           </div>
         </div>
+        <div class="memory-status-stack hidden" id="memory-editor-status"></div>
         <div class="memory-tab-content" id="memory-content">
           <!-- 动态内容 -->
         </div>
@@ -129,6 +131,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
 
   const contentEl = document.getElementById('memory-content');
   const counterEl = document.getElementById('memory-counter');
+  const { showMemoryStatus: showEditorStatus } = createMemoryStatus(overlay.querySelector('#memory-editor-status'));
 
   // 角色卡级：记忆开关 + 携带轮数（仅当前卡生效，立即存到 character）
   const memToggle = document.getElementById('mem-enabled-toggle');
@@ -163,8 +166,12 @@ export async function openMemoryEditor(chat, character, onUpdate) {
     const update = () => {
       counterTimer = null;
       const memoryEdit = { archive: archiveEdit, longTermSummaries: longTermSummariesEdit };
+      const latestAssistant = Array.isArray(chat && chat.messages)
+        ? [...chat.messages].reverse().find((m) => m && m.role === 'assistant')
+        : null;
+      const latestSceneTime = sceneTimeFromText(latestAssistant && latestAssistant.content);
       const residentText = [
-        formatCurrentMemoryState({ state: stateEdit }),
+        formatCurrentMemoryState({ state: stateEdit, archive: archiveEdit }, { currentSceneTime: latestSceneTime }),
         formatRecentMemoryIndexes(memoryEdit),
         formatLongTermMemories(memoryEdit),
         supplementEdit.trim()
@@ -177,7 +184,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
       const residentTokens = countTokens(residentText);
       const indexTokens = countTokens(indexText);
       counterEl.textContent = `常驻约 ${residentTokens}｜索引库约 ${indexTokens} tokens`;
-      counterEl.title = '常驻=当前状态+连续索引+最近10条长期记忆+补充；不统计聊天详细原文、状态快照或召回记录';
+      counterEl.title = '常驻=当前实际注入状态（已扣除休眠NPC展开字段、远期/过期静默约定、已完结事件与离线秘密）+连续索引+最近10条长期记忆+补充；不统计聊天详细原文、状态快照或召回记录';
     };
     if (immediate) update();
     else counterTimer = setTimeout(update, 300);
@@ -207,6 +214,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         contentEl,
         chat,
         character,
+        onStatus: showEditorStatus,
         onChange: updateCounter,
         onData: (state, archive, logs, longTerm) => {
           stateEdit = JSON.parse(JSON.stringify(state));

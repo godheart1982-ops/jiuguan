@@ -8,7 +8,7 @@ import {
   syncMemoryProfiles, makeMemoryStateSnapshot, restoreMemoryStateSnapshot,
   memoryStateForRound, characterCardForMemoryRound, fillMissingIndexSceneTimes, queryNeedsHistoricalDetail,
   filterCoveredRecallRows, shouldRunMemoryRecall, formatMemoryStateForRecall, cleanRecentAssistantForRecall,
-  formatCurrentMemoryState
+  formatCurrentMemoryState, resolveRecallReferenceTime
 } from '../src/services/memory-engine.js';
 import { splitSystemForCache } from '../src/services/api-anthropic.js';
 import { longTermGroupId } from '../src/services/memory-long-term.js';
@@ -636,4 +636,138 @@ test('sexExp（性经历）：补全后锁定保持、在场展示、快照保�
   const card = { name: '小满', characterModules: ['【一句话核心】高三学生'] };
   const round = { user: { content: '小满吃早饭' }, assistant: { content: '小满喝牛奶' } };
   assert.equal(characterCardForMemoryRound(card, noSexExpState, round), '');
+});
+
+test('远期约定静默休眠与自动唤醒：未到时间不注入主对话，临期(<=3天)或用户提及时唤醒', () => {
+  const memory = {
+    archive: [{ turnId: 'turn-1', round: 1, index: { sceneTime: '2026年5月10日_星期日 14:00' } }],
+    state: {
+      ...emptyMemoryState(),
+      scene: '2026年5月10日 家中客厅',
+      characters: [{ name: '林静', core: '律所合伙人', presence: '在场' }],
+      promises: [
+        { id: 'p-near', text: '晚上一起吃火锅', status: 'open', due: '2026年5月11日', sourceTurn: 'turn-1' },
+        { id: 'p-far', text: '去三亚度假旅游', status: 'open', due: '2026年6月15日', sourceTurn: 'turn-1' },
+        { id: 'p-rel', text: '参加行业峰会', status: 'open', due: '下个月', sourceTurn: 'turn-1' }
+      ]
+    }
+  };
+
+  // 5月10日日常对话（即使提到林静名字，也不唤醒6月及下个月的约定）
+  const mayText = formatCurrentMemoryState(memory, {
+    mentionText: '林静今天在家做饭',
+    promiseMentionText: '今晚吃什么？',
+    currentSceneTime: '2026年5月10日_星期日 18:00'
+  });
+  assert.ok(mayText.includes('备忘约定（未到时间勿提）：'));
+  assert.ok(mayText.includes('未临近或未到约定时间前，严禁角色在日常对话中反复提起'));
+  assert.ok(mayText.includes('晚上一起吃火锅'));
+  assert.ok(!mayText.includes('去三亚度假旅游'));
+  assert.ok(!mayText.includes('参加行业峰会'));
+
+  // 用户主动提及「三亚」，立刻唤醒该约定
+  const userMentionText = formatCurrentMemoryState(memory, {
+    promiseMentionText: '对了，三亚那边的酒店定好了吗？',
+    currentSceneTime: '2026年5月10日_星期日 18:00'
+  });
+  assert.ok(userMentionText.includes('去三亚度假旅游'));
+  assert.ok(!userMentionText.includes('参加行业峰会'));
+
+  // 剧情推进到 5月30日（距离下个月6月1日 <= 3天），自动唤醒相对远期约定
+  const mayEndText = formatCurrentMemoryState(memory, {
+    promiseMentionText: '早安',
+    currentSceneTime: '2026年5月30日_星期六 09:00'
+  });
+  assert.ok(mayEndText.includes('参加行业峰会'));
+  assert.ok(!mayEndText.includes('去三亚度假旅游'));
+
+  // 剧情推进到 6月13日（距离 6月15日 <= 3天），自动唤醒绝对远期约定
+  const juneText = formatCurrentMemoryState(memory, {
+    promiseMentionText: '出发前收拾一下',
+    currentSceneTime: '2026年6月13日_星期六 10:00'
+  });
+  assert.ok(juneText.includes('去三亚度假旅游'));
+
+  // 召回消歧精简状态仍保留全部未完成约定，供历史查询使用
+  const recallText = formatMemoryStateForRecall(memory.state);
+  assert.ok(recallText.includes('去三亚度假旅游'));
+  assert.ok(recallText.includes('参加行业峰会'));
+});
+
+test('记忆注入卫生 5 项修复：过期动态字段清空、已完结事件过滤、过期约定隐藏、离线秘密静默与召回时间基准', () => {
+  // 1) goal/plans/agreement 支持填「无」或「已结束」清空，而 sexExp="无" 必须保留
+  const s1 = applyMemoryStatePatch(emptyMemoryState(), {
+    characters: [{ name: '林静', goal: '准备汇报', plans: '周末出差', agreement: '下周签合同', sexExp: '无' }]
+  }, 'turn-1');
+  const s2 = applyMemoryStatePatch(s1, {
+    characters: [{ name: '林静', goal: '无', plans: '已结束', agreement: '暂无', sexExp: '无' }]
+  }, 'turn-2');
+  assert.equal(s2.characters[0].goal, undefined);
+  assert.equal(s2.characters[0].plans, undefined);
+  assert.equal(s2.characters[0].agreement, undefined);
+  assert.equal(s2.characters[0].sexExp, '无');
+  const legacyFormatted = formatMemoryState({
+    ...emptyMemoryState(),
+    characters: [{ name: '苏晴', goal: '无', plans: '暂无', sexExp: '无' }]
+  });
+  assert.ok(!legacyFormatted.includes('目标=无'));
+  assert.ok(!legacyFormatted.includes('个人计划=暂无'));
+  assert.ok(legacyFormatted.includes('性经历=无'));
+
+  // 2) 已完结事件过滤 + 3) 过期 >7 天约定隐藏 + 4) 离线/未提及秘密静默
+  const mem = {
+    archive: [{ turnId: 'turn-1', round: 1, index: { sceneTime: '2026年5月10日_星期日 14:00' } }],
+    state: {
+      ...emptyMemoryState(),
+      scene: '2026年5月25日 公司茶水间',
+      characters: [
+        { name: '林静', presence: '在场' },
+        { name: '苏晴', presence: '不在场' },
+        { name: '周明', presence: '不在场' }
+      ],
+      promises: [
+        { id: 'p-old', text: '晚上8点视频', status: 'open', due: '2026年5月10日', sourceTurn: 'turn-1' }
+      ],
+      events: [
+        { id: 'e-done', text: '季度审计', stage: '已完结' },
+        { id: 'e-live', text: '新项目竞标', stage: '发酵' }
+      ],
+      intel: [
+        { id: 'i-off', text: '苏晴暗中跳槽去竞争对手公司', knownBy: ['苏晴', '周明'] },
+        { id: 'i-on', text: '林静偷偷帮主控挡下处分', knownBy: ['林静'] }
+      ]
+    }
+  };
+  const injected = formatCurrentMemoryState(mem, {
+    mentionText: '林静在茶水间泡咖啡',
+    promiseMentionText: '今天项目进度如何？',
+    currentSceneTime: '2026年5月25日_星期一 10:00'
+  });
+  assert.ok(!injected.includes('季度审计'));
+  assert.ok(injected.includes('新项目竞标→发酵'));
+  assert.ok(!injected.includes('晚上8点视频'));
+  assert.ok(!injected.includes('苏晴暗中跳槽'));
+  assert.ok(injected.includes('林静偷偷帮主控挡下处分'));
+  assert.ok(injected.includes('欲言又止、眼神闪烁'));
+
+  // 一旦用户主动提及苏晴或视频，立刻唤醒对应秘密/过期约定
+  const woken = formatCurrentMemoryState(mem, {
+    mentionText: '听说苏晴最近很忙',
+    promiseMentionText: '上次5月10日说好晚上8点视频后来怎么没打？',
+    currentSceneTime: '2026年5月25日_星期一 10:00'
+  });
+  assert.ok(woken.includes('苏晴暗中跳槽'));
+  assert.ok(woken.includes('晚上8点视频'));
+
+  // 5) 召回基准剧情时间优先从 recentAssistant 状态栏提取，其次 latestArchiveSceneTime，再其次 state.scene
+  assert.equal(resolveRecallReferenceTime({
+    recentAssistant: '>### — 🏙️场景信息🌆 —\n```\n📅日期:2026年6月2日_星期二  🕑时间:20:30\n```',
+    latestArchiveSceneTime: '2026年6月1日_星期一 18:00',
+    currentState: { scene: '家中客厅' }
+  }), '2026年6月2日_星期二 20:30');
+  assert.equal(resolveRecallReferenceTime({
+    recentAssistant: '无状态栏',
+    latestArchiveSceneTime: '2026年6月1日_星期一 18:00',
+    currentState: { scene: '家中客厅' }
+  }), '2026年6月1日_星期一 18:00');
 });

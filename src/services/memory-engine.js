@@ -243,6 +243,9 @@ function normalizeState(state) {
 }
 
 const CHARACTER_FIELDS = ['core', 'presence', 'offscreen', 'appearance', 'kinks', 'sexExp', 'outerAura', 'innerAura', 'relation', 'stage', 'scores', 'mood', 'goal', 'agreement', 'boundaries', 'knowledge', 'plans'];
+const CLEARABLE_CHARACTER_FIELDS = new Set(['goal', 'plans', 'agreement', 'mood', 'offscreen']);
+const CLEAR_SENTINEL_RE = /^(?:无|暂无|没有|已结束|已完成|已取消|已解除|none|null|-|—)$/i;
+const FINISHED_EVENT_STAGE_RE = /^(?:完结|已完结|结束|已结束|解决|已解决|取消|已取消|尘埃落定)$/;
 
 function upsertById(list, item, kind, turnId) {
   if (!item || typeof item !== 'object') return;
@@ -270,6 +273,10 @@ function upsertById(list, item, kind, turnId) {
     for (const field of CHARACTER_FIELDS) {
       if (!Object.prototype.hasOwnProperty.call(item, field)) continue;
       const value = String(item[field] || '').trim();
+      if (CLEARABLE_CHARACTER_FIELDS.has(field) && CLEAR_SENTINEL_RE.test(value)) {
+        delete target[field];
+        continue;
+      }
       // 空字段=模型没提供新值，不允许顺手清空旧状态
       if (value) target[field] = value;
     }
@@ -320,11 +327,197 @@ const CHARACTER_FIELD_LABELS = {
   plans: '个人计划'
 };
 const DORMANT_CHARACTER_FIELDS = ['core', 'presence', 'offscreen', 'relation', 'stage'];
+const PROMISE_WAKE_HORIZON_DAYS = 3;
+const PROMISE_OVERDUE_HIDE_DAYS = 7;
+const CN_SMALL_NUMS = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+
+function parseSmallCount(token) {
+  const s = String(token || '').trim();
+  if (!s) return NaN;
+  if (/^\d+$/.test(s)) return Number(s);
+  return Object.prototype.hasOwnProperty.call(CN_SMALL_NUMS, s) ? CN_SMALL_NUMS[s] : NaN;
+}
+
+function storyDateToDayNumber(d) {
+  return Math.floor(Date.UTC(d.year, d.month - 1, d.day) / 86400000);
+}
+
+function parseStoryDate(text, fallbackYear = null, referenceDate = null) {
+  const s = String(text || '').trim();
+  if (!s) return null;
+  let m = /(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?/.exec(s)
+    || /(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(s);
+  if (m) {
+    const year = Number(m[1]);
+    const month = Number(m[2]);
+    const day = Number(m[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return { year, month, day, precision: 'day' };
+  }
+  m = /(\d{4})\s*年\s*(\d{1,2})\s*月\s*(上旬|初|中旬|下旬|底)?/.exec(s)
+    || /(\d{4})-(\d{1,2})(?!\d)/.exec(s);
+  if (m) {
+    const year = Number(m[1]);
+    const month = Number(m[2]);
+    const part = m[3] || '';
+    const day = part === '中旬' ? 15 : (part === '下旬' || part === '底' ? 25 : 1);
+    if (month >= 1 && month <= 12) return { year, month, day, precision: 'month' };
+  }
+  if (Number.isFinite(fallbackYear)) {
+    m = /(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]/.exec(s);
+    if (m) {
+      const month = Number(m[1]);
+      const day = Number(m[2]);
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        const year = (referenceDate && referenceDate.month >= 11 && month <= 2) ? fallbackYear + 1 : fallbackYear;
+        return { year, month, day, precision: 'day' };
+      }
+    }
+    m = /(\d{1,2})\s*月\s*(上旬|初|中旬|下旬|底)?/.exec(s);
+    if (m) {
+      const month = Number(m[1]);
+      const part = m[2] || '';
+      const day = part === '中旬' ? 15 : (part === '下旬' || part === '底' ? 25 : 1);
+      if (month >= 1 && month <= 12) {
+        const year = (referenceDate && referenceDate.month >= 11 && month <= 2) ? fallbackYear + 1 : fallbackYear;
+        return { year, month, day, precision: 'month' };
+      }
+    }
+  }
+  return null;
+}
+
+function resolveCurrentStoryDate(state, options = {}) {
+  if (options.currentSceneTime) {
+    const parsed = parseStoryDate(options.currentSceneTime);
+    if (parsed) return parsed;
+  }
+  const archive = Array.isArray(options.archive) ? options.archive : [];
+  for (let i = archive.length - 1; i >= 0; i--) {
+    const st = archive[i] && archive[i].index && archive[i].index.sceneTime;
+    const parsed = parseStoryDate(st);
+    if (parsed) return parsed;
+  }
+  return parseStoryDate(state && state.scene);
+}
+
+function estimateRelativeDueDay(dueAndText, createdDate) {
+  const s = String(dueAndText || '');
+  if (!s.trim()) return null;
+  if (/明年|来年/.test(s)) {
+    return { targetDay: createdDate ? storyDateToDayNumber({ year: createdDate.year + 1, month: 1, day: 1 }) : null };
+  }
+  if (/半年[后之]/.test(s)) {
+    return { targetDay: createdDate ? storyDateToDayNumber(createdDate) + 180 : null };
+  }
+  if (/下个?季度/.test(s)) {
+    return { targetDay: createdDate ? storyDateToDayNumber(createdDate) + 90 : null };
+  }
+  if (/下个?月|下月/.test(s)) {
+    const target = createdDate
+      ? { year: createdDate.month === 12 ? createdDate.year + 1 : createdDate.year, month: createdDate.month === 12 ? 1 : createdDate.month + 1, day: 1 }
+      : null;
+    return { targetDay: target ? storyDateToDayNumber(target) : null };
+  }
+  let m = /(\d+|[两二三四五六七八九十])个?月[后之]/.exec(s);
+  if (m) {
+    const n = parseSmallCount(m[1]);
+    if (n >= 1) return { targetDay: createdDate ? storyDateToDayNumber(createdDate) + n * 30 : null };
+  }
+  if (/下(?:周|星期|礼拜)/.test(s)) {
+    return { targetDay: createdDate ? storyDateToDayNumber(createdDate) + 7 : null };
+  }
+  m = /(\d+|[两二三四])(?:周|星期|礼拜)[后之]/.exec(s);
+  if (m) {
+    const n = parseSmallCount(m[1]);
+    if (n >= 1) return { targetDay: createdDate ? storyDateToDayNumber(createdDate) + n * 7 : null };
+  }
+  m = /(\d+|[四五六七八九十])天[后之]/.exec(s);
+  if (m) {
+    const n = parseSmallCount(m[1]);
+    if (n > PROMISE_WAKE_HORIZON_DAYS) return { targetDay: createdDate ? storyDateToDayNumber(createdDate) + n : null };
+  }
+  return null;
+}
+
+function isPromiseMentionedByUser(promise, userMentionText, characterNames) {
+  const mention = String(userMentionText || '').trim();
+  if (!mention) return false;
+  let cleaned = String(promise && promise.text || '');
+  for (const name of Array.isArray(characterNames) ? characterNames : []) {
+    const n = String(name || '').trim();
+    if (n) cleaned = cleaned.split(n).join(' ');
+  }
+  cleaned = cleaned.replace(/主控|约定|承诺|一起|下个月|下月|下周|下星期|下礼拜|明年|准备|计划|去|到|和|跟|与|的|了|在/g, ' ');
+  const segments = cleaned.match(/[\u4e00-\u9fa5A-Za-z0-9]{2,}/g) || [];
+  for (const seg of segments) {
+    if (mention.includes(seg)) return true;
+    if (seg.length > 2) {
+      for (let i = 0; i <= seg.length - 2; i++) {
+        if (mention.includes(seg.slice(i, i + 2))) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isPromiseActiveForInjection(promise, ctx) {
+  if (isPromiseMentionedByUser(promise, ctx.userMentionText, ctx.characterNames)) return true;
+  const horizon = Number.isFinite(ctx.horizonDays) ? ctx.horizonDays : PROMISE_WAKE_HORIZON_DAYS;
+  const overdueLimit = Number.isFinite(ctx.overdueDays) ? ctx.overdueDays : PROMISE_OVERDUE_HIDE_DAYS;
+  const currentDate = ctx.currentDate;
+  const fallbackYear = currentDate ? currentDate.year : null;
+  const dueDate = parseStoryDate(promise && promise.due, fallbackYear, currentDate)
+    || parseStoryDate(promise && promise.text, fallbackYear, currentDate);
+  if (dueDate && currentDate) {
+    const diffDays = storyDateToDayNumber(dueDate) - storyDateToDayNumber(currentDate);
+    return diffDays <= horizon && diffDays >= -overdueLimit;
+  }
+  const sourceEntry = promise && promise.sourceTurn && Array.isArray(ctx.archive)
+    ? ctx.archive.find((e) => e && e.turnId === promise.sourceTurn)
+    : null;
+  const createdDate = parseStoryDate(sourceEntry && sourceEntry.index && sourceEntry.index.sceneTime) || currentDate;
+  const rel = estimateRelativeDueDay(`${promise && promise.due || ''} ${promise && promise.text || ''}`, createdDate);
+  if (rel) {
+    if (rel.targetDay !== null && currentDate) {
+      const diffDays = rel.targetDay - storyDateToDayNumber(currentDate);
+      return diffDays <= horizon && diffDays >= -overdueLimit;
+    }
+    return false;
+  }
+  return true;
+}
+
+function isIntelActiveForInjection(intel, ctx) {
+  const text = String(intel && intel.text || '');
+  if (/主控|玩家/.test(text)) return true;
+  const characters = Array.isArray(ctx && ctx.characters) ? ctx.characters : [];
+  const mention = String(ctx && ctx.mentionText || '');
+  const related = new Set();
+  for (const k of Array.isArray(intel && intel.knownBy) ? intel.knownBy : []) {
+    const name = String(k || '').trim();
+    if (name && name !== '主控' && name !== '玩家') related.add(name);
+  }
+  for (const c of characters) {
+    const name = String(c && c.name || '').trim();
+    if (name && text.includes(name)) related.add(name);
+  }
+  if (!related.size) return true;
+  for (const name of related) {
+    const charObj = characters.find((c) => String(c && c.name || '').trim() === name);
+    if (charObj && String(charObj.presence || '').trim() === '在场') return true;
+    if (mention && mention.includes(name)) return true;
+  }
+  let cleaned = text;
+  for (const name of related) cleaned = cleaned.split(name).join(' ');
+  cleaned = cleaned.replace(/未公开|秘密|隐瞒|其实|已经|正在|关系|计划|的|了|在|与|和/g, ' ');
+  const segments = cleaned.match(/[\u4e00-\u9fa5A-Za-z0-9]{2,}/g) || [];
+  return segments.some((seg) => mention.includes(seg));
+}
 
 function formatCharacterLine(c, fields) {
   const details = fields
     .map((key) => [key, String(c[key] || '').trim()])
-    .filter(([, value]) => value)
+    .filter(([key, value]) => value && !(CLEARABLE_CHARACTER_FIELDS.has(key) && CLEAR_SENTINEL_RE.test(value)))
     .map(([key, value]) => `${CHARACTER_FIELD_LABELS[key]}=${value}`);
   return c.name ? `人物【${c.name}】${details.join('；')}` : '';
 }
@@ -356,10 +549,28 @@ export function formatMemoryState(stateRaw, options = {}) {
     const line = formatCharacterLine(c, fields);
     if (line) lines.push(line);
   }
-  const openPromises = state.promises.filter((p) => p.status !== 'done');
-  if (openPromises.length) lines.push('未完成约定：' + openPromises.map((p) => `${p.text}${p.due ? `（${p.due}）` : ''}`).join('｜'));
-  if (state.events.length) lines.push('进行中事件：' + state.events.map((e) => `${e.text}${e.stage ? `→${e.stage}` : ''}`).join('｜'));
-  if (state.intel.length) lines.push('关系与秘密知情：' + state.intel.map((i) => `${i.text}【可知：${(i.knownBy || []).join('、') || '暂无'}】`).join('｜'));
+  let openPromises = state.promises.filter((p) => p.status !== 'done');
+  if (options.foldFarPromises === true && openPromises.length) {
+    const currentDate = resolveCurrentStoryDate(state, options);
+    const characterNames = state.characters.map((c) => c && c.name).filter(Boolean);
+    const promiseCtx = {
+      currentDate,
+      archive: options.archive,
+      userMentionText: options.promiseMentionText || '',
+      characterNames,
+      horizonDays: options.promiseHorizonDays ?? PROMISE_WAKE_HORIZON_DAYS
+    };
+    openPromises = openPromises.filter((p) => isPromiseActiveForInjection(p, promiseCtx));
+  }
+  if (openPromises.length) lines.push('备忘约定（未到时间勿提）：' + openPromises.map((p) => `${p.text}${p.due ? `（${p.due}）` : ''}`).join('｜'));
+  const activeEvents = options.foldFinishedEvents === true
+    ? state.events.filter((e) => !FINISHED_EVENT_STAGE_RE.test(String(e && e.stage || '').trim()))
+    : state.events;
+  if (activeEvents.length) lines.push('进行中事件：' + activeEvents.map((e) => `${e.text}${e.stage ? `→${e.stage}` : ''}`).join('｜'));
+  const activeIntel = options.foldOffscreenIntel === true
+    ? state.intel.filter((i) => isIntelActiveForInjection(i, { characters: state.characters, mentionText: options.mentionText || '' }))
+    : state.intel;
+  if (activeIntel.length) lines.push('关系与秘密知情：' + activeIntel.map((i) => `${i.text}【可知：${(i.knownBy || []).join('、') || '暂无'}】`).join('｜'));
   return lines.join('\n');
 }
 
@@ -387,13 +598,19 @@ export function formatCurrentMemoryState(memory, options = {}) {
   if (!memory || !memory.state) return '';
   const body = formatMemoryState(memory.state, {
     foldDormant: options.foldDormant !== false,
+    foldFarPromises: options.foldFarPromises !== false,
+    foldFinishedEvents: options.foldFinishedEvents !== false,
+    foldOffscreenIntel: options.foldOffscreenIntel !== false,
     archive: memory.archive,
     mentionText: options.mentionText || '',
+    promiseMentionText: options.promiseMentionText || '',
+    currentSceneTime: options.currentSceneTime || '',
+    promiseHorizonDays: options.promiseHorizonDays,
     foldThreshold: options.foldThreshold,
     activeWindow: options.activeWindow
   });
   if (!body) return '';
-  return '【当前状态账本】（记录当前有效状态；与最近一轮状态栏存在新旧差异时，以最近一轮为准。角色卡提供初始一句话核心、人格、外貌与性癖，首次补全值和明确后续变化以账本为准；一句话核心只在身份、主要矛盾或长期处境变化时更新，核心人格不得单轮骤变。人物已在场时，最近场外状态仅供衔接，不覆盖当前正文；场外旁白、性癖与内在气质均不等于主控知情）\n' + body;
+  return '【当前状态账本】（记录当前有效状态；与最近一轮状态栏存在新旧差异时，以最近一轮为准。角色卡提供初始一句话核心、人格、外貌与性癖，首次补全值和明确后续变化以账本为准；一句话核心只在身份、主要矛盾或长期处境变化时更新，核心人格不得单轮骤变。人物已在场时，最近场外状态仅供衔接，不覆盖当前正文；场外旁白、性癖与内在气质均不等于主控知情。备忘约定仅为静默备忘：未临近或未到约定时间前，严禁角色在日常对话中反复提起、催促或强行铺垫，只有临近/到达约定时间或用户主动提及时才自然提及。人物的个人计划/长期目标与背景进行中事件仅作生活重心与世界底噪，无关日常闲聊或亲密场景勿反复强行提及；关系与秘密知情仅用于防止不知情者说漏嘴，禁止每轮刻意铺垫或让角色动辄“欲言又止、眼神闪烁”）\n' + body;
 }
 
 function parseJson(raw) {
@@ -454,7 +671,7 @@ export async function processRoundForMemory(round, context = {}) {
  "statePatch":{
   "scene":"当前场景；无变化留空",
   "characters":[{"name":"全名","core":"一句话核心，20字以内：身份+当前主要矛盾或目标+当前状态","presence":"在场/不在场；有变化才填","offscreen":"不在场重要NPC模块的最近状态，含最后确认时段","appearance":"一行当前外貌身材；含明确持续变化","kinks":"成年角色稳定特殊XP；普通体位/力度/节奏偏好不算，首次补全后固定","sexExp":"性经历（照抄状态栏🍆性经历或角色卡设定，如总共1人合计:3次/无；确定后固定，仅本轮实际发生实质性行为时才更新）","outerAura":"外人第一眼感受到的气质","innerAura":"实际内在气质","relation":"当前关系名分","stage":"阶段","scores":"只照抄状态栏三轴","mood":"当前情绪","goal":"当前目标","agreement":"已明确的关系约定","boundaries":"当前亲密接受边界","knowledge":"当前知道的关键情报","plans":"正在推进的个人计划","evidence":"本轮正文/状态栏证据，或首次设定补全"}],
-  "promises":[{"id":"旧条目id；新增留空","text":"约定","status":"open/done","due":"期限","evidence":"证据","op":"upsert/remove"}],
+  "promises":[{"id":"旧条目id；新增留空","text":"约定","status":"open/done","due":"具体剧情到期时间（结合本轮sceneTime把下个月/下周五/明天尽量换算成具体年月或年月日，如2026年6月、2026年5月22日；无具体时间再写触发条件）","evidence":"证据","op":"upsert/remove"}],
   "events":[{"id":"旧id/新增留空","text":"事件名","stage":"当前阶段","evidence":"证据","op":"upsert/remove"}],
   "intel":[{"id":"旧id/新增留空","text":"符合白名单的关系或秘密","knownBy":["当前全量知情人"],"evidence":"证据及提前知情会改变什么","op":"upsert/remove"}]
  }
@@ -462,7 +679,7 @@ export async function processRoundForMemory(round, context = {}) {
 
 硬性规则：
 1. 索引摘要必须写具体人名，禁止只用她/他/对方；keywords 与 aliases 用于以后找回这一轮详细原文。sceneTime 必须从本轮状态栏📅日期与🕑时间提取完整剧情日期时间，禁止留空、只写时段或使用现实发送时间；状态栏缺失时才结合当前状态和上一轮时间合理补全。
-2. statePatch 只写变化项与首次缺失设定；没提到的旧数据保持原样。禁止因旧约定本轮没出现就标 done，删除必须 op=remove 且有明确依据。
+2. statePatch 只写变化项与首次缺失设定；没提到的旧数据保持原样。禁止因旧约定本轮没出现就标 done，删除必须 op=remove 且有明确依据。人物的 goal/plans/agreement 已结束或取消时可填「无」清空，避免过期计划长期滞留。
 3. 本轮重要或持续互动人物首次进入账本，或上述固定字段仍为空时，必须补齐缺失值：角色卡已有内容优先照抄，缺失处结合年龄、职业、人设、正文与世界背景生成，生成后即为固定正史，后续不得重抽，只有怀孕、伤病、体重变化等明确事件才更新当前外貌。女性 appearance 包含神似明星、身高、体重、三围、罩杯；男性包含身高、体重、性器长度与粗度，数值须合理协调，明星不照抄示例且避免不同角色重复。一次性路人/功能NPC不要建立完整人物状态。
 4. core 是人物当前的一句话锚点，20字以内，用大白话说明身份、当前主要矛盾或目标及当前状态，没有主要矛盾时不硬编。首次缺失时必须补齐：角色卡有【一句话核心】就原文照抄，否则结合本轮正文与人设生成。后续只有身份、主要矛盾或长期处境确实变化才更新；单轮情绪、争吵、亲密或一次选择不得重写。core 不属于锁定固定档案，但必须防止无理由漂移。
 5. kinks 与 sexExp：kinks 只给成年角色生成；未成年角色不生成性癖或性器信息。性癖是对特定情境、权力关系、对象特征或行为模式的稳定而特别的性唤起倾向，不是一切喜欢或舒服。首次补全可依据人设生成1-2项真正符合定义的特殊XP；后续新增必须有角色卡明示、角色明确自认，或至少两次不同场景主动寻求的稳定模式。喜欢某体位、快慢、力度、亲吻、拥抱、情话、普通地点、一般亲密行为、一次好奇/配合/高潮及主控单方面偏好均不算性癖，禁止换词包装后新增。性癖属于AI内部设定，不等于主控知情或角色会立即表现。sexExp 首次入库优先照抄状态栏性经历或角色卡设定（如「总共1人合计:3次」或「无」），确定后严格锁定，仅当本轮正文实际发生实质性性行为时才按真实变化递增更新人数与次数；未发生时禁止估算、改写或飘移（未成年或非亲密线角色可留空）。外在/内在气质可以一致，禁止为反差而反差，内在气质不因一次失态永久重写。
@@ -471,7 +688,7 @@ export async function processRoundForMemory(round, context = {}) {
 8. 「不在场重要NPC」有实际进展时，更新该人物 presence=不在场、offscreen 及有依据的 mood/goal/plans；只是照抄旧状态则不要重复上报。NPC实体入场时更新 presence=在场，offscreen 保留作最近场外衔接，不得覆盖当前正文。
 9. 场外地点绝不能覆盖主控所在的 scene。普通场外生活不得自动修改 relation/stage/scores/boundaries 或永久人格。场外旁白不等于主控知情。
 10. intel 只允许这些类别：未公开的恋爱/婚姻/血缘/真实身份；未公开怀孕/疾病/伤情；未公开离职/裁员/转学/财务危机；犯罪/报复/危险计划；明确要求保密的行程/约定/计划。且必须同时满足：至少一个相关者目前不能知道、提前知道会改变其台词/决定/冲突、有明确正文依据；缺一不加，拿不准不加。天气、衣着、普通地点、饮食、公开新闻/关系、普通情绪、一次性对话、一般喜好及当前状态可见事实禁止加入。
-11. 同一关系或秘密只保留一条，知情人增加必须用旧id更新全量 knownBy，不得新建重复条目；完全公开后可 op=remove，把事实留在人物状态或 events。有重要公共事件时才更新 events。
+11. 同一关系或秘密只保留一条，知情人增加必须用旧id更新全量 knownBy，不得新建重复条目；完全公开后可 op=remove，把事实留在人物状态或 events。有重要公共事件时才更新 events；事件完结或平息结束后用 op=remove 移除，不要长期保留已完结事件。
 12. 没有变化且没有首次补全需要时，对应数组输出 []。不要编造。已锁定固定档案中的值必须原样沿用、不得重抽；外貌只按原文明确后续事件更新。
 
 【当前状态账本（含旧条目id）】
@@ -688,6 +905,16 @@ export function shouldRunMemoryRecall(memory, query = {}) {
   return candidates.some((entry) => !continuousIds.has(String(entry.turnId)));
 }
 
+/** 优先从最近回复状态栏提取最新剧情时间，依次回退最新索引 sceneTime 与当前状态 scene。 */
+export function resolveRecallReferenceTime(query = {}) {
+  const fromRecent = sceneTimeFromText(query && query.recentAssistant);
+  if (fromRecent) return fromRecent;
+  const fromArchive = String(query && query.latestArchiveSceneTime || '').trim();
+  if (fromArchive) return fromArchive;
+  const fromScene = String(query && query.currentState && query.currentState.scene || '').trim();
+  return fromScene || '未记录';
+}
+
 async function requestRecallBatch(api, cards, query, phase = 'coarse') {
   const finalPhase = phase === 'final';
   const prompt = `请从索引卡中找出本轮真正需要的历史记忆。允许一个也不选，禁止为凑数而选。
@@ -714,7 +941,7 @@ ${String(query.rewrittenQuery || '尚未改写')}
 ${String(query.actionContext || '自由输入或无可用选项')}
 
 【当前剧情时间（相对日期换算基准）】
-${String(query.currentState && query.currentState.scene || '未记录')}
+${resolveRecallReferenceTime(query)}
 
 【当前状态（仅用于消歧）】
 ${formatMemoryStateForRecall(query.currentState) || '无'}
@@ -810,7 +1037,12 @@ export async function selectMemoryRecalls(memory, query = {}) {
     ...entry.index,
     ...(coveredTurnIds.has(String(entry.turnId)) ? { covered: true } : {})
   }));
-  const result = await runRecallPipeline(cards, query,
+  const latestArchiveEntry = [...memory.archive].reverse().find((e) => e && e.index && String(e.index.sceneTime || '').trim());
+  const effectiveQuery = {
+    ...query,
+    latestArchiveSceneTime: String(latestArchiveEntry && latestArchiveEntry.index && latestArchiveEntry.index.sceneTime || '').trim()
+  };
+  const result = await runRecallPipeline(cards, effectiveQuery,
     (batch, batchQuery, phase) => requestRecallBatch(api, batch, batchQuery, phase));
   const rows = filterCoveredRecallRows(result.rows, result.scope, coveredTurnIds, result.needsDetail);
   const recalls = finalizeRecallSelections(memory, rows, result.scope, { allowDetail: result.needsDetail });

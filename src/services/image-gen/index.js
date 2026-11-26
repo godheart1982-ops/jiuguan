@@ -2,7 +2,8 @@
 export {
   isPaidImageProvider, isStrictMechanicalProvider, imageProviderDisplayName,
   generateSeedreamImage, generateWanxImage, generateGrokImage,
-  buildGrokWebChatBody, generateGrokWebImage, generateGeminiImage
+  buildGrokWebChatBody, generateGrokWebImage, generateGeminiImage,
+  buildOpenAIImageRequestBody, generateOpenAIImage, fetchOpenAIModels
 } from './providers.js';
 export {
   anchorTextOf, anchorImgOf, mergeAnchorText, resolveAnchorRefImages,

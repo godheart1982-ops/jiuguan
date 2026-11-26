@@ -5,6 +5,8 @@ import {
   generateGrokImage,
   generateGrokWebImage,
   generateWanxImage,
+  generateOpenAIImage,
+  fetchOpenAIModels,
   DEFAULT_GROK_COMPOSE_SYSTEM_PROMPT,
   DEFAULT_GROK_DUO_COMPOSE_SYSTEM_PROMPT,
   DEFAULT_GROK_OUTFIT_LIBRARY,
@@ -29,6 +31,7 @@ export async function renderImageSettingsModal() {
   const sd = image.seedream || {};
   const gm = image.gemini || {};
   const wx = image.wanx || {};
+  const oa = image.openai || {};
   const gk = image.grok || {};
   const gw = image.grokweb || {};
 
@@ -59,6 +62,7 @@ export async function renderImageSettingsModal() {
               <option value="seedream" ${image.provider === 'seedream' ? 'selected' : ''}>火山方舟 Seedream（付费，约 99 AFP/张）</option>
               <option value="wanx" ${image.provider === 'wanx' ? 'selected' : ''}>阿里百炼 万相（付费，compatible-mode）</option>
               <option value="gemini" ${image.provider === 'gemini' ? 'selected' : ''}>Google Gemini（付费，Nano Banana 系列）</option>
+              <option value="openai" ${image.provider === 'openai' ? 'selected' : ''}>OpenAI 生图（付费，审核严格）</option>
               <option value="grok" ${image.provider === 'grok' ? 'selected' : ''}>xAI Grok Imagine（付费，审核宽松）</option>
               <option value="grokweb" ${image.provider === 'grokweb' ? 'selected' : ''}>Grok 网页反代（局域网自托管，grok.com 账号）</option>
               <option value="manual" ${image.provider === 'manual' ? 'selected' : ''}>手动模式（App 出提示词，自己到网页版生图后选图插入）</option>
@@ -227,9 +231,57 @@ export async function renderImageSettingsModal() {
               <div class="form-hint">以反代 /v1/models 返回的为准；网页版无宽高比/分辨率参数，构图写进提示词即可（管线已自动带"竖向构图"等镜头词）。</div>
             </div>
           </div>
+          <div id="group-openai-config">
+            <div class="form-group">
+              <label class="form-label">OpenAI Base URL</label>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input class="form-input" id="setting-openai-base-url" type="text" value="${escapeHtml(oa.baseUrl || 'https://api.openai.com/v1')}" placeholder="https://api.openai.com/v1" style="flex: 1;">
+                <button class="btn btn-secondary btn-small" id="btn-openai-reset-base-url" type="button" style="white-space: nowrap;">重置为官方地址</button>
+              </div>
+              <div class="form-hint">支持官方及 OpenAI 兼容中转站（一般到 /v1 为止，/images/generations 与 /models 由 App 自动拼接）。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">OpenAI API Key</label>
+              <input class="form-input" id="setting-openai-api-key" type="password" value="${escapeHtml(oa.apiKey || '')}" placeholder="sk-...">
+              <div class="form-hint">按调用次数计费且审核严格（自动套用严格版外貌锚点、衣着模板库与敏感词硬过滤）。</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">生图模型</label>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input class="form-input" id="setting-openai-model" type="text" value="${escapeHtml(oa.model || 'gpt-image-1')}" placeholder="gpt-image-1" style="flex: 1;">
+                <button class="btn btn-secondary btn-small" id="btn-openai-fetch-models" type="button" style="white-space: nowrap;">获取模型</button>
+              </div>
+              <select class="form-input" id="setting-openai-model-select" style="display: none; margin-top: 8px;"></select>
+              <div class="form-hint" id="openai-models-status">可手动填写（如 gpt-image-1、dall-e-3），或点击「获取模型」从接口拉取列表选择。</div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">图片尺寸</label>
+                <select class="form-input" id="setting-openai-size">
+                  <option value="auto" ${(oa.size || '1024x1536') === 'auto' ? 'selected' : ''}>auto（自动）</option>
+                  <option value="1024x1536" ${(oa.size || '1024x1536') === '1024x1536' ? 'selected' : ''}>竖版 1024x1536（gpt-image-1 推荐）</option>
+                  <option value="1024x1024" ${oa.size === '1024x1024' ? 'selected' : ''}>方形 1024x1024</option>
+                  <option value="1536x1024" ${oa.size === '1536x1024' ? 'selected' : ''}>横版 1536x1024</option>
+                  <option value="1024x1792" ${oa.size === '1024x1792' ? 'selected' : ''}>竖版 1024x1792（dall-e-3）</option>
+                  <option value="1792x1024" ${oa.size === '1792x1024' ? 'selected' : ''}>横版 1792x1024（dall-e-3）</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">生成质量</label>
+                <select class="form-input" id="setting-openai-quality">
+                  <option value="auto" ${(oa.quality || 'auto') === 'auto' ? 'selected' : ''}>auto（默认）</option>
+                  <option value="low" ${oa.quality === 'low' ? 'selected' : ''}>low（省钱，gpt-image）</option>
+                  <option value="medium" ${oa.quality === 'medium' ? 'selected' : ''}>medium（均衡，gpt-image）</option>
+                  <option value="high" ${oa.quality === 'high' ? 'selected' : ''}>high（精细，gpt-image）</option>
+                  <option value="standard" ${oa.quality === 'standard' ? 'selected' : ''}>standard（dall-e-3）</option>
+                  <option value="hd" ${oa.quality === 'hd' ? 'selected' : ''}>hd（dall-e-3）</option>
+                </select>
+              </div>
+            </div>
+          </div>
           <div id="group-paid-common">
             <div class="form-group" id="group-strict-outfit-library">
-              <label class="form-label">严格版衣着模板库（Seedream / Gemini 共用）</label>
+              <label class="form-label">严格版衣着模板库（Seedream / 万相 / Gemini / OpenAI 共用）</label>
               <textarea class="form-input" id="setting-strict-outfit-library" rows="8" style="font-family: monospace; font-size: 0.85rem;"></textarea>
               <div class="form-hint">严格版不写表情/场景/剧情姿态，提示词 = <strong>外貌锚点 + 本库随机一行 + 镜头参数</strong>。一行一条，空行忽略。<strong>{颜色}</strong> 会直接填入完整色感短语（单色或已混好的审美拼色，如「黑白经典拼色」「酒红与米色混搭」），模板里通常只写一个 {颜色} 即可；{同色} 同本次色感；{配色} 为配套次要色（可选）。例：穿着{颜色}连衣裙。留空保存则用内置默认。</div>
               <div class="form-row" style="margin-top: 8px; gap: 8px;">
@@ -349,15 +401,17 @@ export async function renderImageSettingsModal() {
     const isSeedream = enabled && imageProviderEl.value === 'seedream';
     const isGemini = enabled && imageProviderEl.value === 'gemini';
     const isWanx = enabled && imageProviderEl.value === 'wanx';
+    const isOpenAI = enabled && imageProviderEl.value === 'openai';
     const isFree = enabled && imageProviderEl.value === 'pollinations';
     const isGrok = enabled && imageProviderEl.value === 'grok';
     const isGrokWeb = enabled && imageProviderEl.value === 'grokweb';
     const isManual = enabled && imageProviderEl.value === 'manual';
-    const isStrict = isSeedream || isGemini || isWanx;
+    const isStrict = isSeedream || isGemini || isWanx || isOpenAI;
     const isGrokLike = isGrok || isManual || isGrokWeb;
     seedreamConfigGroup.style.display = isSeedream ? '' : 'none';
     geminiConfigGroup.style.display = isGemini ? '' : 'none';
     wanxConfigGroup.style.display = isWanx ? '' : 'none';
+    document.getElementById('group-openai-config').style.display = isOpenAI ? '' : 'none';
     pollinationsConfigGroup.style.display = isFree ? '' : 'none';
     grokConfigGroup.style.display = isGrok ? '' : 'none';
     document.getElementById('group-grokweb-config').style.display = isGrokWeb ? '' : 'none';
@@ -372,6 +426,73 @@ export async function renderImageSettingsModal() {
   imageEnabledEl.addEventListener('change', syncImageGroups);
   imageProviderEl.addEventListener('change', syncImageGroups);
   syncImageGroups();
+
+  // OpenAI 生图：重置官方 Base URL & 从接口拉取模型列表并同步到模型输入框
+  const openaiBaseUrlInput = document.getElementById('setting-openai-base-url');
+  document.getElementById('btn-openai-reset-base-url').addEventListener('click', () => {
+    openaiBaseUrlInput.value = 'https://api.openai.com/v1';
+  });
+  const openaiModelInput = document.getElementById('setting-openai-model');
+  const openaiModelSelect = document.getElementById('setting-openai-model-select');
+  const openaiFetchModelsBtn = document.getElementById('btn-openai-fetch-models');
+  const openaiModelsStatus = document.getElementById('openai-models-status');
+  openaiModelSelect.addEventListener('change', () => {
+    if (openaiModelSelect.value) {
+      openaiModelInput.value = openaiModelSelect.value;
+    }
+  });
+  openaiFetchModelsBtn.addEventListener('click', async () => {
+    const baseUrl = document.getElementById('setting-openai-base-url').value.trim();
+    const apiKey = document.getElementById('setting-openai-api-key').value.trim();
+    openaiFetchModelsBtn.disabled = true;
+    openaiModelsStatus.textContent = '正在获取模型列表…';
+    try {
+      const { all, imageLikely } = await fetchOpenAIModels({ baseUrl, apiKey });
+      if (!all.length) {
+        openaiModelSelect.style.display = 'none';
+        openaiModelsStatus.textContent = '⚠️ 接口未返回任何模型，请手动填写模型 ID。';
+        return;
+      }
+      openaiModelSelect.innerHTML = '';
+      const imageSet = new Set(imageLikely);
+      const others = all.filter(id => !imageSet.has(id));
+      const appendOptions = (parent, ids) => {
+        for (const id of ids) {
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = id;
+          parent.appendChild(opt);
+        }
+      };
+      if (imageLikely.length > 0 && others.length > 0) {
+        const imgGroup = document.createElement('optgroup');
+        imgGroup.label = `疑似生图模型 (${imageLikely.length})`;
+        appendOptions(imgGroup, imageLikely);
+        const otherGroup = document.createElement('optgroup');
+        otherGroup.label = `其他模型 (${others.length})`;
+        appendOptions(otherGroup, others);
+        openaiModelSelect.appendChild(imgGroup);
+        openaiModelSelect.appendChild(otherGroup);
+      } else {
+        appendOptions(openaiModelSelect, all);
+      }
+      const current = openaiModelInput.value.trim();
+      if (current && all.includes(current)) {
+        openaiModelSelect.value = current;
+      } else {
+        openaiModelSelect.value = all[0];
+        openaiModelInput.value = all[0];
+      }
+      openaiModelSelect.style.display = '';
+      openaiModelsStatus.textContent = imageLikely.length > 0
+        ? `✅ 已抓取 ${all.length} 个模型（其中 ${imageLikely.length} 个疑似生图模型，已优先排在前面）。`
+        : `✅ 已抓取 ${all.length} 个模型，请从上方下拉框选择。`;
+    } catch (e) {
+      openaiModelsStatus.textContent = `❌ ${e.message || '获取模型失败'}`;
+    } finally {
+      openaiFetchModelsBtn.disabled = false;
+    }
+  });
 
   // 测试提示词：大窗口编辑（长提示词在小文本框里太难改）
   document.getElementById('btn-edit-test-prompt').addEventListener('click', () => {
@@ -439,6 +560,15 @@ export async function renderImageSettingsModal() {
           baseUrl: document.getElementById('setting-wanx-base-url').value.trim(),
           model: document.getElementById('setting-wanx-model').value.trim(),
           size: document.getElementById('setting-wanx-size').value.trim(),
+          prompt
+        });
+      } else if (imageProviderEl.value === 'openai') {
+        dataUrl = await generateOpenAIImage({
+          apiKey: document.getElementById('setting-openai-api-key').value.trim(),
+          baseUrl: document.getElementById('setting-openai-base-url').value.trim(),
+          model: document.getElementById('setting-openai-model').value.trim(),
+          size: document.getElementById('setting-openai-size').value,
+          quality: document.getElementById('setting-openai-quality').value,
           prompt
         });
       } else {
@@ -558,6 +688,13 @@ export async function renderImageSettingsModal() {
         apiKey: document.getElementById('setting-wanx-api-key').value.trim(),
         model: document.getElementById('setting-wanx-model').value.trim(),
         size: document.getElementById('setting-wanx-size').value.trim()
+      },
+      openai: {
+        baseUrl: document.getElementById('setting-openai-base-url').value.trim(),
+        apiKey: document.getElementById('setting-openai-api-key').value.trim(),
+        model: document.getElementById('setting-openai-model').value.trim(),
+        size: document.getElementById('setting-openai-size').value,
+        quality: document.getElementById('setting-openai-quality').value
       },
       gemini: {
         baseUrl: document.getElementById('setting-gemini-base-url').value.trim(),
