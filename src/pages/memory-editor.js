@@ -1,8 +1,8 @@
 // 记忆编辑器：🧠 全屏弹窗；当前状态/对话索引/长期记忆/召回记录 + 生图/补充辅助页签。
 // 自包含模块——自己建遮罩、绑事件、保存，输入仅 (chat, character, onUpdate)，与聊天页状态零耦合。
 // migrateMemory 也住在这里：它既被编辑器调用，也被聊天页打开旧对话时做结构迁移。
-import { saveCharacter, saveChat, saveAnchorRefImage, deleteAnchorRefImage, getGeneratedImageDataUrl } from '../services/storage.js';
-import { anchorTextOf, anchorImgOf } from '../services/image-gen.js';
+import { getConfig, saveCharacter, saveChat, saveAnchorRefImage, deleteAnchorRefImage, getGeneratedImageDataUrl } from '../services/storage.js';
+import { anchorTextOf, anchorImgOf, extractNamedAppearanceAnchor } from '../services/image-gen.js';
 import { migrateChat } from '../services/migrations.js';
 import { countTokens } from '../utils/tokenizer.js';
 import { openBigTextEditor } from '../utils/big-editor.js';
@@ -12,8 +12,8 @@ import { emptyMemoryState, formatCurrentMemoryState, formatRecentMemoryIndexes, 
 import { formatLongTermMemories } from '../services/memory-long-term.js';
 import { mergeMemoryEditorSnapshots } from '../services/memory-editor-merge.js';
 
-// 参考图上传前压缩：最长边 ≤1024px 转 jpeg（脸特征足够，省存储省上传）
-function resizeImageDataUrl(dataUrl, maxDim = 1024) {
+// 参考图上传前压缩：最长边 ≤1536px 转 jpeg（兼顾四视图多角度人脸清晰度与体积）
+function resizeImageDataUrl(dataUrl, maxDim = 1536) {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
@@ -338,6 +338,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
         <div class="memory-card" data-name="${escapeHtml(name)}">
           <div class="memory-card-header">
             <span style="flex: 1; font-size: 0.9rem; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(name)}</span>
+            <button class="btn btn-ghost btn-small btn-reextract-anchor" data-name="${escapeHtml(name)}">🔄 重新提取</button>
             <button class="btn btn-ghost btn-small btn-expand-anchor" data-name="${escapeHtml(name)}">⛶ 展开编辑</button>
             <button class="btn btn-danger btn-small btn-delete-anchor" data-name="${escapeHtml(name)}">删除</button>
           </div>
@@ -346,14 +347,14 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             <img class="anchor-ref-preview" data-name="${escapeHtml(name)}" ${rec.img ? `data-img="${escapeHtml(rec.img)}"` : ''} alt="" style="width: 48px; height: 48px; object-fit: cover; border-radius: 6px; background: #1c1c1f; ${rec.img ? '' : 'display: none;'}">
             <button class="btn btn-ghost btn-small btn-upload-anchor-ref" data-name="${escapeHtml(name)}">📷 ${rec.img ? '更换参考图' : '上传参考图'}</button>
             ${rec.img ? `<button class="btn btn-danger btn-small btn-clear-anchor-ref" data-name="${escapeHtml(name)}">清除图</button>` : ''}
-            <span style="font-size: 11px; color: #888;">有图时出图的脸以图为准（仅 Grok 网页反代通道）</span>
+            <span style="font-size: 11px; color: #888;">有图时五官以图为准（OpenAI gpt-image / xAI Grok / Grok 网页反代）</span>
           </div>
         </div>
       `).join('');
       contentEl.innerHTML = `
       <div class="memory-section">
         <div class="memory-section-title">生图外貌身材锚点档案（${Object.keys(appearanceAnchorsEdit).length}）</div>
-        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">按角色名登记的固定容貌身材描述+可选参考图，只用于生图（不进对话上下文）。新角色首次生图后自动从设定/状态栏提取登记，之后同名角色每张图都是同一张脸。提取不准就直接改；删掉则下次生图重新提取。锚点建议以"一位{N}岁女性"开头——画面年龄以锚点为准（想让角色显年轻就写小几岁），剧情里的年龄不影响出图。参考图（Grok 网页反代通道）：上传后出图时一并发送，容貌以图为准、文字锚点管身材与场景。</div>
+        <div class="memory-section-hint" style="font-size: 12px; color: #888; margin: 2px 0 8px;">按角色名登记的固定容貌身材描述+可选参考图，只用于生图（不进对话上下文）。新角色首次生图后自动从设定/状态栏提取登记，之后同名角色每张图都是同一张脸。提取不准就直接改；删掉则下次生图重新提取。锚点建议以"一位{N}岁女性"开头——画面年龄以锚点为准（想让角色显年轻就写小几岁），剧情里的年龄不影响出图。参考图（支持 OpenAI gpt-image、xAI Grok 与 Grok 网页反代，支持单人照或多角度脸部拼图）：上传后出图时一并发送，五官容貌以图为准，发型/配饰/服装与场景随剧情动态生成。</div>
         <div class="memory-list">${anchorRows || '<div class="memory-empty">暂无锚点记录（新角色首次生图后自动登记）</div>'}</div>
         <div style="display: flex; gap: 8px; margin-top: 12px;">
           <input type="text" class="form-input" id="anchor-new-name" placeholder="角色名（与状态栏一致）" style="flex: 1;">
@@ -387,7 +388,7 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             reader.onerror = reject;
             reader.readAsDataURL(file);
           });
-          const resized = await resizeImageDataUrl(raw, 1024);
+          const resized = await resizeImageDataUrl(raw, 1536);
           const relPath = await saveAnchorRefImage(character.id, chat.id, targetName, resized);
           if (!appearanceAnchorsEdit[targetName]) appearanceAnchorsEdit[targetName] = { text: '', img: '' };
           appearanceAnchorsEdit[targetName].img = relPath;
@@ -433,6 +434,38 @@ export async function openMemoryEditor(chat, character, onUpdate) {
             rec.img = '';
           }
           renderContent();
+        });
+      });
+      // 🔄 重新提取外貌/身材锚点（有参考图时自动略过脸型五官，只提年龄与身材轮廓）
+      contentEl.querySelectorAll('.btn-reextract-anchor').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const name = btn.dataset.name;
+          const rec = appearanceAnchorsEdit[name] || { text: '', img: '' };
+          const hasRefImage = Boolean(rec.img);
+          const originalText = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '提取中…';
+          try {
+            const cfg = await getConfig();
+            const msgs = Array.isArray(chat.messages) ? chat.messages : [];
+            const assistantMsgs = msgs.filter((m) => m && m.role === 'assistant');
+            const matched = assistantMsgs.filter((m) => (m.content || '').includes(name)).slice(-2);
+            const recent = matched.length ? matched : assistantMsgs.slice(-2);
+            const replyContent = recent.map((m) => m.content || '').join('\n\n');
+            const extracted = await extractNamedAppearanceAnchor({
+              name,
+              replyContent,
+              character,
+              apiConfig: cfg.api || {},
+              hasRefImage
+            });
+            appearanceAnchorsEdit[name] = { text: extracted, img: rec.img || '' };
+            renderContent();
+          } catch (err) {
+            alert('重新提取失败：' + (err && err.message ? err.message : err));
+            btn.disabled = false;
+            btn.textContent = originalText;
+          }
         });
       });
       // ⛶ 大窗口编辑（长锚点/英文锚点小框里太难改）

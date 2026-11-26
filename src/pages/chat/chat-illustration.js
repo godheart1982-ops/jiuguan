@@ -7,7 +7,6 @@ import {
   generateIllustrationFromPrompt,
   prepareIllustrationPrompt,
   isPaidImageProvider,
-  isStrictMechanicalProvider,
   imageProviderDisplayName,
   shotWordsOf,
   mergeAnchorText,
@@ -63,9 +62,7 @@ export async function showSeedreamLoading(anchorEl) {
   const cfg = await getConfig().catch(() => ({}));
   const p = (cfg.image && cfg.image.provider) || 'pollinations';
   const providerName = imageProviderDisplayName(p);
-  const phase = isStrictMechanicalProvider(p)
-    ? `锚点+衣着模板 → ${providerName}`
-    : `副 API 总结画面 → ${providerName}`;
+  const phase = `副 API 总结画面 → ${providerName}`;
   const target = anchorEl.closest('.img-seedream-failrow') || anchorEl;
   const loading = document.createElement('div');
   loading.className = 'img-seedream-loading';
@@ -148,12 +145,10 @@ export function createIllustrationController(ctx) {
     const flightKey = `${msg.timestamp || ''}::${index}::${mk.full.slice(0, 50)}`;
     if (inFlightMarkers.has(flightKey)) return null;
     inFlightMarkers.add(flightKey);
-    const statusPhase = isStrictMechanicalProvider(provider)
-      ? `锚点+衣着模板 → ${providerName}`
-      : `副 API 总结画面 → ${providerName}`;
+    const statusPhase = `副 API 总结画面 → ${providerName}`;
     await updateGenerationForeground({
       title: '正在生成插图',
-      text: isStrictMechanicalProvider(provider) ? '正在拼接锚点与衣着模板…' : '副 API 正在总结画面…'
+      text: '副 API 正在总结画面…'
     }).catch(() => {});
     showMemoryStatus(`🖼 正在生成插图（${statusPhase}）…`, 'info');
     let wrote = { changed: false, visible: false };

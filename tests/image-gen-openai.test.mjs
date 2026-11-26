@@ -5,7 +5,11 @@ import {
   isStrictMechanicalProvider,
   imageProviderDisplayName,
   buildOpenAIImageRequestBody,
+  buildOpenAIImageEditFormData,
+  buildGrokImageRequestBody,
+  OPENAI_REF_IMAGE_PROMPT_PREFIX,
   generateOpenAIImage,
+  generateGrokImage,
   fetchOpenAIModels
 } from '../src/services/image-gen.js';
 import { isModerationError } from '../src/services/image-gen/providers.js';
@@ -193,4 +197,163 @@ test('fetchOpenAIModels fetches, deduplicates, sorts image models first, and han
     () => fetchOpenAIModels({ baseUrl: 'https://api.openai.com/v1', apiKey: 'bad' }),
     /获取模型失败 \(401\): Invalid API key/
   );
+});
+
+test('buildOpenAIImageEditFormData and generateOpenAIImage reference image flow', async (t) => {
+  const origFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = origFetch; });
+
+  const sampleImg = 'data:image/jpeg;base64,QUJD';
+  const fd = buildOpenAIImageEditFormData({
+    model: 'gpt-image-1',
+    prompt: '雨夜咖啡馆窗边',
+    size: '1024x1536',
+    quality: 'auto',
+    images: [sampleImg]
+  });
+  assert.equal(fd.get('model'), 'gpt-image-1');
+  assert.equal(fd.get('input_fidelity'), 'high');
+  assert.equal(fd.get('size'), '1024x1536');
+  assert.equal(fd.get('quality'), null);
+  assert.match(OPENAI_REF_IMAGE_PROMPT_PREFIX, /Use the exact woman's face/);
+  assert.match(OPENAI_REF_IMAGE_PROMPT_PREFIX, /not a collage/);
+  assert.ok(String(fd.get('prompt')).startsWith(OPENAI_REF_IMAGE_PROMPT_PREFIX));
+  assert.ok(fd.get('image') instanceof Blob);
+
+  const fdLow = buildOpenAIImageEditFormData({
+    model: 'gpt-image-1',
+    prompt: '雨夜咖啡馆窗边',
+    inputFidelity: 'low',
+    images: [sampleImg]
+  });
+  assert.equal(fdLow.get('input_fidelity'), 'low');
+
+  // 1) gpt-image-1 with ref image -> /images/edits; 400 on input_fidelity retries without it
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, body: init.body });
+    if (calls.length === 1) {
+      return {
+        ok: false,
+        status: 400,
+        async text() {
+          return JSON.stringify({ error: { message: 'Unknown parameter: input_fidelity' } });
+        }
+      };
+    }
+    return {
+      ok: true,
+      async json() {
+        return { data: [{ b64_json: 'RUVG' }] };
+      }
+    };
+  };
+
+  let capturedMeta = null;
+  const out = await generateOpenAIImage({
+    baseUrl: 'https://relay.example.com/v1/images/generations',
+    apiKey: 'sk-ref',
+    model: 'gpt-image-1',
+    prompt: '窗边咖啡馆',
+    images: [sampleImg],
+    onMeta: (m) => { capturedMeta = m; }
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, 'https://relay.example.com/v1/images/edits');
+  assert.equal(calls[0].body.get('input_fidelity'), 'high');
+  assert.equal(calls[1].url, 'https://relay.example.com/v1/images/edits');
+  assert.equal(calls[1].body.get('input_fidelity'), null);
+  assert.deepEqual(capturedMeta, { mode: 'edits', inputFidelity: null, downgraded: true });
+  assert.equal(out, 'data:image/png;base64,RUVG');
+
+  // 2) dall-e-3 ignores ref images and uses /images/generations
+  let dalleUrl = '';
+  let dalleMeta = null;
+  globalThis.fetch = async (url) => {
+    dalleUrl = url;
+    return {
+      ok: true,
+      async json() {
+        return { data: [{ b64_json: 'REFM' }] };
+      }
+    };
+  };
+  const dalleOut = await generateOpenAIImage({
+    baseUrl: 'https://api.openai.com/v1',
+    apiKey: 'sk-ref',
+    model: 'dall-e-3',
+    prompt: '窗边咖啡馆',
+    images: [sampleImg],
+    onMeta: (m) => { dalleMeta = m; }
+  });
+  assert.equal(dalleUrl, 'https://api.openai.com/v1/images/generations');
+  assert.deepEqual(dalleMeta, { mode: 'generations', skippedRefImage: true });
+  assert.equal(dalleOut, 'data:image/png;base64,REFM');
+});
+
+test('buildGrokImageRequestBody and generateGrokImage support JSON /images/edits and /images/generations', async (t) => {
+  const origFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = origFetch; });
+
+  const img1 = 'data:image/jpeg;base64,QUJD';
+  const img2 = 'data:image/png;base64,REVG';
+
+  const gen = buildGrokImageRequestBody({ model: 'grok-imagine-image', prompt: '雨夜街头', aspectRatio: '9:16', resolution: '1k' });
+  assert.equal(gen.isEdit, false);
+  assert.equal(gen.body.image, undefined);
+  assert.equal(gen.body.images, undefined);
+  assert.equal(gen.body.prompt, '雨夜街头');
+
+  const editOne = buildGrokImageRequestBody({ model: 'grok-imagine-image-2.0', prompt: '窗边咖啡馆', images: [img1] });
+  assert.equal(editOne.isEdit, true);
+  assert.deepEqual(editOne.body.image, { url: img1, type: 'image_url' });
+  assert.equal(editOne.body.images, undefined);
+  assert.ok(editOne.body.prompt.startsWith(OPENAI_REF_IMAGE_PROMPT_PREFIX));
+
+  const editTwo = buildGrokImageRequestBody({ model: 'grok-imagine-image-2.0', prompt: '窗边咖啡馆', images: [img1, img2] });
+  assert.equal(editTwo.isEdit, true);
+  assert.equal(editTwo.body.image, undefined);
+  assert.deepEqual(editTwo.body.images, [
+    { url: img1, type: 'image_url' },
+    { url: img2, type: 'image_url' }
+  ]);
+
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({ url, body: JSON.parse(init.body) });
+    return {
+      ok: true,
+      async json() {
+        return { data: [{ b64_json: 'R1JPSw==' }] };
+      }
+    };
+  };
+
+  let metaEdit = null;
+  const outEdit = await generateGrokImage({
+    baseUrl: 'https://api.x.ai/v1/images/generations',
+    apiKey: 'xai-test',
+    model: 'grok-imagine-image-2.0',
+    aspectRatio: '9:16',
+    resolution: '2k',
+    prompt: '窗边咖啡馆',
+    images: [img1],
+    onMeta: (m) => { metaEdit = m; }
+  });
+  assert.equal(captured[0].url, 'https://api.x.ai/v1/images/edits');
+  assert.deepEqual(captured[0].body.image, { url: img1, type: 'image_url' });
+  assert.equal(captured[0].body.aspect_ratio, '9:16');
+  assert.equal(captured[0].body.resolution, '2k');
+  assert.deepEqual(metaEdit, { mode: 'edits' });
+  assert.equal(outEdit, 'data:image/png;base64,R1JPSw==');
+
+  let metaGen = null;
+  await generateGrokImage({
+    baseUrl: 'https://api.x.ai/v1/',
+    apiKey: 'xai-test',
+    prompt: '纯文生图',
+    onMeta: (m) => { metaGen = m; }
+  });
+  assert.equal(captured[1].url, 'https://api.x.ai/v1/images/generations');
+  assert.deepEqual(metaGen, { mode: 'generations' });
 });

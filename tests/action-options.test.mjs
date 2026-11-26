@@ -134,3 +134,15 @@ test('标题容错：兼容 ### 行动选项 / 【行动选项】 / **行动选�
   assert.equal(splitActionOptionsBlock(prose).options.length, 0);
   assert.equal(stripActionOptions(prose), prose);
 });
+
+test('插图截断容错：不带 > 的插图标题或裸图片标记均保留在 after，不吞进选项', () => {
+  const withPlainHeading = '正文。\n\n>### 行动选项\n1. 先看她一眼\n2. 倒杯水\n\n### 🖼️插图\n![林晚](local-img://a.png)';
+  const res1 = splitActionOptionsBlock(withPlainHeading);
+  assert.equal(res1.options.length, 2);
+  assert.equal(res1.after, '### 🖼️插图\n![林晚](local-img://a.png)');
+
+  const withBareImage = '正文。\n\n>### 行动选项\n1. 先看她一眼\n2. 倒杯水\n\n![林晚](seedream://)';
+  const res2 = splitActionOptionsBlock(withBareImage);
+  assert.equal(res2.options.length, 2);
+  assert.equal(res2.after, '![林晚](seedream://)');
+});

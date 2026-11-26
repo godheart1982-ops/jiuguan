@@ -7,16 +7,18 @@ import {
   generateWanxImage,
   generateOpenAIImage,
   fetchOpenAIModels,
+  DEFAULT_COMPOSE_SYSTEM_PROMPT,
   DEFAULT_GROK_COMPOSE_SYSTEM_PROMPT,
   DEFAULT_GROK_DUO_COMPOSE_SYSTEM_PROMPT,
   DEFAULT_GROK_OUTFIT_LIBRARY,
-  DEFAULT_STRICT_OUTFIT_LIBRARY,
-  resolveStrictOutfitLibrary,
   resolveGrokOutfitLibrary,
   outfitLibraryToText,
-  parseOutfitLibraryText
+  parseOutfitLibraryText,
+  composeTestIllustrationPrompt,
+  prepareFinalTestImagePrompt
 } from '../../services/image-gen.js';
 import { sendChat } from '../../services/api.js';
+import { resolveMemoryApi } from '../../services/api-memory.js';
 import { openBigTextEditor } from '../../utils/big-editor.js';
 import { openImageLightbox } from '../../utils/image-lightbox.js';
 import { escapeHtml } from './settings-shared.js';
@@ -181,8 +183,11 @@ export async function renderImageSettingsModal() {
           <div id="group-grok-config">
             <div class="form-group">
               <label class="form-label">Grok Base URL</label>
-              <input class="form-input" id="setting-grok-base-url" type="text" value="${escapeHtml(gk.baseUrl || 'https://api.x.ai/v1')}" placeholder="https://api.x.ai/v1">
-              <div class="form-hint">用中转站就填中转地址（一般到 /v1 为止，/images/generations 由 App 自动拼接）；官方直连填 https://api.x.ai/v1。</div>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input class="form-input" id="setting-grok-base-url" type="text" value="${escapeHtml(gk.baseUrl || 'https://api.x.ai/v1')}" placeholder="https://api.x.ai/v1" style="flex: 1;">
+                <button class="btn btn-secondary btn-small" id="btn-grok-reset-base-url" type="button" style="white-space: nowrap;">重置为官方地址</button>
+              </div>
+              <div class="form-hint">用中转站就填中转地址（一般到 /v1 为止，/images/generations、/images/edits 与 /models 由 App 自动拼接）；官方直连填 https://api.x.ai/v1。</div>
             </div>
             <div class="form-group">
               <label class="form-label">Grok API Key</label>
@@ -191,8 +196,12 @@ export async function renderImageSettingsModal() {
             </div>
             <div class="form-group">
               <label class="form-label">生图模型 ID</label>
-              <input class="form-input" id="setting-grok-model" type="text" value="${escapeHtml(gk.model || 'grok-imagine-image')}" placeholder="grok-imagine-image">
-              <div class="form-hint">标准版 grok-imagine-image；高质量版 grok-imagine-image-quality（更贵）。以你的中转站实际开通的为准。</div>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input class="form-input" id="setting-grok-model" type="text" value="${escapeHtml(gk.model || 'grok-imagine-image')}" placeholder="grok-imagine-image" style="flex: 1;">
+                <button class="btn btn-secondary btn-small" id="btn-grok-fetch-models" type="button" style="white-space: nowrap;">获取模型</button>
+              </div>
+              <select class="form-input" id="setting-grok-model-select" style="display: none; margin-top: 8px;"></select>
+              <div class="form-hint" id="grok-models-status">可手动填写（如 grok-imagine-image、grok-imagine-image-2.0），或点击「获取模型」从接口拉取列表选择。</div>
             </div>
             <div class="form-group">
               <label class="form-label">宽高比</label>
@@ -278,16 +287,16 @@ export async function renderImageSettingsModal() {
                 </select>
               </div>
             </div>
+            <div class="form-group">
+              <label class="form-label">参考图还原度（input_fidelity）</label>
+              <select class="form-input" id="setting-openai-input-fidelity">
+                <option value="high" ${(oa.inputFidelity || 'high') === 'high' ? 'selected' : ''}>high（推荐，高保真锁脸，四视图必备）</option>
+                <option value="low" ${oa.inputFidelity === 'low' ? 'selected' : ''}>low（弱参考，仅大致风格参考）</option>
+              </select>
+              <div class="form-hint">仅上传了角色外貌参考图且使用 gpt-image 系列时生效；默认 high 锁紧五官，发型与服装靠提示词按剧情重绘。</div>
+            </div>
           </div>
           <div id="group-paid-common">
-            <div class="form-group" id="group-strict-outfit-library">
-              <label class="form-label">严格版衣着模板库（Seedream / 万相 / Gemini / OpenAI 共用）</label>
-              <textarea class="form-input" id="setting-strict-outfit-library" rows="8" style="font-family: monospace; font-size: 0.85rem;"></textarea>
-              <div class="form-hint">严格版不写表情/场景/剧情姿态，提示词 = <strong>外貌锚点 + 本库随机一行 + 镜头参数</strong>。一行一条，空行忽略。<strong>{颜色}</strong> 会直接填入完整色感短语（单色或已混好的审美拼色，如「黑白经典拼色」「酒红与米色混搭」），模板里通常只写一个 {颜色} 即可；{同色} 同本次色感；{配色} 为配套次要色（可选）。例：穿着{颜色}连衣裙。留空保存则用内置默认。</div>
-              <div class="form-row" style="margin-top: 8px; gap: 8px;">
-                <button class="btn btn-ghost" id="btn-strict-outfit-library-reset">↺ 恢复默认库</button>
-              </div>
-            </div>
             <div class="form-group" id="group-grok-person-mode">
               <label class="form-label">人物模式（仅 Grok / 手动）</label>
               <select class="form-input" id="setting-grok-person-mode">
@@ -297,10 +306,10 @@ export async function renderImageSettingsModal() {
               <div class="form-hint">仅 Grok 与手动模式生效。严格版（Seedream/Gemini）固定单人，不提供双人。主控以背影/侧脸入镜；单人/双人 compose 指令分开存储。</div>
             </div>
             <div class="form-group" id="group-compose-prompt">
-              <label class="form-label">生图提示词系统指令（compose，仅 Grok / 手动）</label>
+              <label class="form-label">生图提示词系统指令（compose）</label>
               <div class="form-hint" id="compose-mode-hint" style="color: var(--accent, #7c9eff);"></div>
               <textarea class="form-input" id="setting-seedream-compose-prompt" rows="10" style="font-family: monospace; font-size: 0.85rem;"></textarea>
-              <div class="form-hint">自定义副 API 总结生图提示词时的 system prompt。Grok 单人/双人<strong>分开存储</strong>：切换人物模式时自动切换编辑对象。留空则用内置默认。占位符：{charDesc}、{replyContent}。</div>
+              <div class="form-hint">自定义副 API 总结生图提示词时的 system prompt。严格版（Seedream / 万相 / Gemini / OpenAI）与 Grok 单人/双人<strong>分开存储</strong>，留空则用内置默认。占位符：{charDesc}、{replyContent}。</div>
               <div class="form-row" style="margin-top: 8px; gap: 8px;">
                 <button class="btn btn-ghost" id="btn-seedream-compose-reset">↺ 恢复默认</button>
                 <button class="btn btn-ghost" id="btn-seedream-compose-test">🧪 测试总结</button>
@@ -319,9 +328,19 @@ export async function renderImageSettingsModal() {
                 <label class="form-label">测试生图</label>
                 <button class="btn btn-ghost btn-small" id="btn-edit-test-prompt">⛶ 展开编辑</button>
               </div>
-              <textarea class="form-input" id="setting-seedream-test-prompt" rows="3" placeholder="输入一段中文或英文提示词，例如：一位长发少女坐在窗边看书，午后阳光，柔和色调"></textarea>
-              <div class="form-row" style="margin-top: 8px; align-items: center; gap: 10px;">
-                <button class="btn btn-ghost" id="btn-seedream-test">🧪 测试生图（消耗 1 张额度）</button>
+              <textarea class="form-input" id="setting-seedream-test-prompt" rows="3" placeholder="留空点「测试生图」会自动调用副 API 随机生成一段画面描述并出图；也可以先点「副 API 随机出词」预览或手动修改"></textarea>
+              <div id="group-test-ref-image" style="display: none; margin-top: 8px;">
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                  <img id="test-ref-image-preview" alt="" style="width: 48px; height: 48px; object-fit: cover; border-radius: 6px; background: #1c1c1f; display: none;">
+                  <button class="btn btn-ghost btn-small" id="btn-upload-test-ref" type="button">📷 上传测试参考图</button>
+                  <button class="btn btn-danger btn-small" id="btn-clear-test-ref" type="button" style="display: none;">清除参考图</button>
+                  <input type="file" id="input-test-ref-image" accept="image/*" style="display: none;">
+                </div>
+                <div class="form-hint">可选：支持单人照或多角度脸部拼图（仅本次测试生效，不写入配置；OpenAI gpt-image、xAI Grok 与 Grok 网页反代可用，dall-e 模型会自动忽略）。</div>
+              </div>
+              <div class="form-row" style="margin-top: 8px; align-items: center; gap: 10px; flex-wrap: wrap;">
+                <button class="btn btn-ghost" id="btn-random-test-prompt" type="button">🎲 副 API 随机出词</button>
+                <button class="btn btn-ghost" id="btn-seedream-test" type="button">🧪 测试生图（消耗 1 张额度）</button>
                 <span class="form-hint" id="seedream-test-status"></span>
               </div>
               <img id="seedream-test-result" class="seedream-test-result" style="display: none; cursor: zoom-in;" alt="测试生成结果" title="点击查看大图">
@@ -352,19 +371,26 @@ export async function renderImageSettingsModal() {
   const paidCommonGroup = document.getElementById('group-paid-common');
   const composePromptEl = document.getElementById('setting-seedream-compose-prompt');
   const grokPersonModeEl = document.getElementById('setting-grok-person-mode');
-  // compose 仅 Grok / 手动：单人、双人两槽分开存储
+  // compose 三槽独立存储：严格版（Seedream/万相/Gemini/OpenAI 共用）、Grok 单人、Grok 双人
+  const isStrictProvider = (p) => p === 'seedream' || p === 'wanx' || p === 'gemini' || p === 'openai';
   const composeDefaults = {
+    strict: DEFAULT_COMPOSE_SYSTEM_PROMPT,
     grokSolo: DEFAULT_GROK_COMPOSE_SYSTEM_PROMPT,
     grokDuo: DEFAULT_GROK_DUO_COMPOSE_SYSTEM_PROMPT
   };
   const composeState = {
+    strict: sd.composePrompt || DEFAULT_COMPOSE_SYSTEM_PROMPT,
     grokSolo: gk.composePrompt || DEFAULT_GROK_COMPOSE_SYSTEM_PROMPT,
     grokDuo: gk.composePromptDuo || DEFAULT_GROK_DUO_COMPOSE_SYSTEM_PROMPT
   };
-  const composeModeOf = () => (grokPersonModeEl.value === 'duo' ? 'grokDuo' : 'grokSolo');
+  const composeModeOf = () => {
+    if (isStrictProvider(imageProviderEl.value)) return 'strict';
+    return grokPersonModeEl.value === 'duo' ? 'grokDuo' : 'grokSolo';
+  };
   let composeMode = composeModeOf();
   const composeModeHintEl = document.getElementById('compose-mode-hint');
   const composeModeHints = {
+    strict: '当前编辑：严格版真人电影剧照指令（单人 + 完整环境光影 + 私密保空间避焦点）',
     grokSolo: '当前编辑：Grok 单人宽松版（场景/衣着/表情/身材已解放，仅保留非全裸红线）',
     grokDuo: '当前编辑：Grok 双人版（主控可入镜，成年男性+背影/侧脸+肢体归属铁律）'
   };
@@ -373,18 +399,13 @@ export async function renderImageSettingsModal() {
   };
   composePromptEl.value = composeState[composeMode];
   updateComposeModeHint();
-  // 严格版衣着库 + Grok/手动私密衣着库（均支持多行；兼容旧 forcedOutfit）
-  const strictOutfitLibEl = document.getElementById('setting-strict-outfit-library');
+  // Grok/手动私密衣着库（支持多行；兼容旧 forcedOutfit）
   const grokOutfitLibEl = document.getElementById('setting-grok-outfit-library');
-  strictOutfitLibEl.value = outfitLibraryToText(resolveStrictOutfitLibrary(sd));
   grokOutfitLibEl.value = outfitLibraryToText(resolveGrokOutfitLibrary(gk));
-  document.getElementById('btn-strict-outfit-library-reset').addEventListener('click', () => {
-    strictOutfitLibEl.value = outfitLibraryToText(DEFAULT_STRICT_OUTFIT_LIBRARY);
-  });
   document.getElementById('btn-grok-outfit-reset').addEventListener('click', () => {
     grokOutfitLibEl.value = outfitLibraryToText(DEFAULT_GROK_OUTFIT_LIBRARY);
   });
-  // 切换人物模式时暂存 compose 编辑内容
+  // 切换服务商或人物模式时暂存并切换 compose 编辑内容
   const switchComposeMode = () => {
     composeState[composeMode] = composePromptEl.value;
     composeMode = composeModeOf();
@@ -416,82 +437,114 @@ export async function renderImageSettingsModal() {
     grokConfigGroup.style.display = isGrok ? '' : 'none';
     document.getElementById('group-grokweb-config').style.display = isGrokWeb ? '' : 'none';
     paidCommonGroup.style.display = (isStrict || isGrokLike) ? '' : 'none';
-    // 严格版：衣着模板库；Grok/手动：人物模式 + compose + 强制衣着
-    document.getElementById('group-strict-outfit-library').style.display = isStrict ? '' : 'none';
+    // 严格版与 Grok/手动共用 compose 指令；Grok/手动额外显示人物模式 + 私密强制衣着库
     document.getElementById('group-grok-person-mode').style.display = isGrokLike ? '' : 'none';
-    document.getElementById('group-compose-prompt').style.display = isGrokLike ? '' : 'none';
+    document.getElementById('group-compose-prompt').style.display = (isStrict || isGrokLike) ? '' : 'none';
     document.getElementById('group-grok-forced-outfit').style.display = isGrokLike ? '' : 'none';
     document.getElementById('group-test-image').style.display = (isStrict || isGrok || isGrokWeb) ? '' : 'none';
+    document.getElementById('group-test-ref-image').style.display = (isOpenAI || isGrok || isGrokWeb) ? '' : 'none';
   };
   imageEnabledEl.addEventListener('change', syncImageGroups);
-  imageProviderEl.addEventListener('change', syncImageGroups);
+  imageProviderEl.addEventListener('change', () => {
+    switchComposeMode();
+    syncImageGroups();
+  });
   syncImageGroups();
 
-  // OpenAI 生图：重置官方 Base URL & 从接口拉取模型列表并同步到模型输入框
-  const openaiBaseUrlInput = document.getElementById('setting-openai-base-url');
-  document.getElementById('btn-openai-reset-base-url').addEventListener('click', () => {
-    openaiBaseUrlInput.value = 'https://api.openai.com/v1';
-  });
-  const openaiModelInput = document.getElementById('setting-openai-model');
-  const openaiModelSelect = document.getElementById('setting-openai-model-select');
-  const openaiFetchModelsBtn = document.getElementById('btn-openai-fetch-models');
-  const openaiModelsStatus = document.getElementById('openai-models-status');
-  openaiModelSelect.addEventListener('change', () => {
-    if (openaiModelSelect.value) {
-      openaiModelInput.value = openaiModelSelect.value;
+  // 通用模型抓取与下拉选择绑定（OpenAI / Grok 共用）
+  const bindModelFetcher = ({
+    baseUrlId, apiKeyId, modelInputId, modelSelectId, fetchBtnId, statusId, resetBtnId, defaultBaseUrl
+  }) => {
+    const baseUrlInput = document.getElementById(baseUrlId);
+    const apiKeyInput = document.getElementById(apiKeyId);
+    const modelInput = document.getElementById(modelInputId);
+    const modelSelect = document.getElementById(modelSelectId);
+    const fetchBtn = document.getElementById(fetchBtnId);
+    const statusEl = document.getElementById(statusId);
+    if (resetBtnId && defaultBaseUrl) {
+      document.getElementById(resetBtnId).addEventListener('click', () => {
+        baseUrlInput.value = defaultBaseUrl;
+      });
     }
-  });
-  openaiFetchModelsBtn.addEventListener('click', async () => {
-    const baseUrl = document.getElementById('setting-openai-base-url').value.trim();
-    const apiKey = document.getElementById('setting-openai-api-key').value.trim();
-    openaiFetchModelsBtn.disabled = true;
-    openaiModelsStatus.textContent = '正在获取模型列表…';
-    try {
-      const { all, imageLikely } = await fetchOpenAIModels({ baseUrl, apiKey });
-      if (!all.length) {
-        openaiModelSelect.style.display = 'none';
-        openaiModelsStatus.textContent = '⚠️ 接口未返回任何模型，请手动填写模型 ID。';
-        return;
+    modelSelect.addEventListener('change', () => {
+      if (modelSelect.value) {
+        modelInput.value = modelSelect.value;
       }
-      openaiModelSelect.innerHTML = '';
-      const imageSet = new Set(imageLikely);
-      const others = all.filter(id => !imageSet.has(id));
-      const appendOptions = (parent, ids) => {
-        for (const id of ids) {
-          const opt = document.createElement('option');
-          opt.value = id;
-          opt.textContent = id;
-          parent.appendChild(opt);
+    });
+    fetchBtn.addEventListener('click', async () => {
+      const baseUrl = baseUrlInput.value.trim();
+      const apiKey = apiKeyInput.value.trim();
+      fetchBtn.disabled = true;
+      statusEl.textContent = '正在获取模型列表…';
+      try {
+        const { all, imageLikely } = await fetchOpenAIModels({ baseUrl, apiKey });
+        if (!all.length) {
+          modelSelect.style.display = 'none';
+          statusEl.textContent = '⚠️ 接口未返回任何模型，请手动填写模型 ID。';
+          return;
         }
-      };
-      if (imageLikely.length > 0 && others.length > 0) {
-        const imgGroup = document.createElement('optgroup');
-        imgGroup.label = `疑似生图模型 (${imageLikely.length})`;
-        appendOptions(imgGroup, imageLikely);
-        const otherGroup = document.createElement('optgroup');
-        otherGroup.label = `其他模型 (${others.length})`;
-        appendOptions(otherGroup, others);
-        openaiModelSelect.appendChild(imgGroup);
-        openaiModelSelect.appendChild(otherGroup);
-      } else {
-        appendOptions(openaiModelSelect, all);
+        modelSelect.innerHTML = '';
+        const imageSet = new Set(imageLikely);
+        const others = all.filter(id => !imageSet.has(id));
+        const appendOptions = (parent, ids) => {
+          for (const id of ids) {
+            const opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = id;
+            parent.appendChild(opt);
+          }
+        };
+        if (imageLikely.length > 0 && others.length > 0) {
+          const imgGroup = document.createElement('optgroup');
+          imgGroup.label = `疑似生图模型 (${imageLikely.length})`;
+          appendOptions(imgGroup, imageLikely);
+          const otherGroup = document.createElement('optgroup');
+          otherGroup.label = `其他模型 (${others.length})`;
+          appendOptions(otherGroup, others);
+          modelSelect.appendChild(imgGroup);
+          modelSelect.appendChild(otherGroup);
+        } else {
+          appendOptions(modelSelect, all);
+        }
+        const current = modelInput.value.trim();
+        if (current && all.includes(current)) {
+          modelSelect.value = current;
+        } else {
+          modelSelect.value = all[0];
+          modelInput.value = all[0];
+        }
+        modelSelect.style.display = '';
+        statusEl.textContent = imageLikely.length > 0
+          ? `✅ 已抓取 ${all.length} 个模型（其中 ${imageLikely.length} 个疑似生图模型，已优先排在前面）。`
+          : `✅ 已抓取 ${all.length} 个模型，请从上方下拉框选择。`;
+      } catch (e) {
+        statusEl.textContent = `❌ ${e.message || '获取模型失败'}`;
+      } finally {
+        fetchBtn.disabled = false;
       }
-      const current = openaiModelInput.value.trim();
-      if (current && all.includes(current)) {
-        openaiModelSelect.value = current;
-      } else {
-        openaiModelSelect.value = all[0];
-        openaiModelInput.value = all[0];
-      }
-      openaiModelSelect.style.display = '';
-      openaiModelsStatus.textContent = imageLikely.length > 0
-        ? `✅ 已抓取 ${all.length} 个模型（其中 ${imageLikely.length} 个疑似生图模型，已优先排在前面）。`
-        : `✅ 已抓取 ${all.length} 个模型，请从上方下拉框选择。`;
-    } catch (e) {
-      openaiModelsStatus.textContent = `❌ ${e.message || '获取模型失败'}`;
-    } finally {
-      openaiFetchModelsBtn.disabled = false;
-    }
+    });
+  };
+
+  bindModelFetcher({
+    baseUrlId: 'setting-openai-base-url',
+    apiKeyId: 'setting-openai-api-key',
+    modelInputId: 'setting-openai-model',
+    modelSelectId: 'setting-openai-model-select',
+    fetchBtnId: 'btn-openai-fetch-models',
+    statusId: 'openai-models-status',
+    resetBtnId: 'btn-openai-reset-base-url',
+    defaultBaseUrl: 'https://api.openai.com/v1'
+  });
+
+  bindModelFetcher({
+    baseUrlId: 'setting-grok-base-url',
+    apiKeyId: 'setting-grok-api-key',
+    modelInputId: 'setting-grok-model',
+    modelSelectId: 'setting-grok-model-select',
+    fetchBtnId: 'btn-grok-fetch-models',
+    statusId: 'grok-models-status',
+    resetBtnId: 'btn-grok-reset-base-url',
+    defaultBaseUrl: 'https://api.x.ai/v1'
   });
 
   // 测试提示词：大窗口编辑（长提示词在小文本框里太难改）
@@ -513,21 +566,104 @@ export async function renderImageSettingsModal() {
     if (e.target.src) openImageLightbox(e.target.src, '测试生成结果');
   });
 
-  // 测试生图：直接用表单里未保存的值调用，结果内联预览
+  // 测试参考图：弹窗内临时保存（支持单人照或多角度拼图），不写入全局配置
+  let testRefImageDataUrl = null;
+  const testRefPreviewEl = document.getElementById('test-ref-image-preview');
+  const testRefClearBtn = document.getElementById('btn-clear-test-ref');
+  const testRefFileInput = document.getElementById('input-test-ref-image');
+  const resizeTestRefImage = (dataUrl, maxDim = 1536) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      if (scale >= 1) return resolve(dataUrl);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+  document.getElementById('btn-upload-test-ref').addEventListener('click', () => {
+    testRefFileInput.click();
+  });
+  testRefFileInput.addEventListener('change', () => {
+    const file = testRefFileInput.files?.[0];
+    testRefFileInput.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      testRefImageDataUrl = await resizeTestRefImage(String(reader.result || ''));
+      testRefPreviewEl.src = testRefImageDataUrl;
+      testRefPreviewEl.style.display = '';
+      testRefClearBtn.style.display = '';
+    };
+    reader.readAsDataURL(file);
+  });
+  testRefClearBtn.addEventListener('click', () => {
+    testRefImageDataUrl = null;
+    testRefPreviewEl.removeAttribute('src');
+    testRefPreviewEl.style.display = 'none';
+    testRefClearBtn.style.display = 'none';
+  });
+
+  // 副 API 随机出词：随机抽测试剧情，按当前 compose 指令生成一段画面描述并回填到测试框
+  const testPromptTextarea = document.getElementById('setting-seedream-test-prompt');
+  const randomPromptBtn = document.getElementById('btn-random-test-prompt');
+  const generateRandomTestPrompt = async (statusEl) => {
+    const latestConfig = await getConfig();
+    const provider = imageProviderEl.value;
+    const duoMode = !isStrictProvider(provider) && grokPersonModeEl.value === 'duo';
+    const customCompose = composePromptEl.value.trim();
+    const hasRefImage = Boolean(testRefImageDataUrl && (provider === 'openai' || provider === 'grok' || provider === 'grokweb'));
+    statusEl.textContent = hasRefImage ? '副 API 正在随机编词（已开启参考图跳过五官模式）…' : '副 API 正在随机编词…';
+    const { prompt: generatedPrompt, scenarioLabel } = await composeTestIllustrationPrompt({
+      composePrompt: customCompose,
+      provider,
+      duoMode,
+      apiConfig: latestConfig.api || {},
+      hasRefImage
+    });
+    testPromptTextarea.value = generatedPrompt;
+    return { generatedPrompt, scenarioLabel, hasRefImage };
+  };
+
+  randomPromptBtn.addEventListener('click', async () => {
+    const statusEl = document.getElementById('seedream-test-status');
+    randomPromptBtn.disabled = true;
+    try {
+      const { scenarioLabel, hasRefImage } = await generateRandomTestPrompt(statusEl);
+      statusEl.textContent = hasRefImage
+        ? `🎲 已由副 API 随机生成（${scenarioLabel}，已跳过五官描写），可直接点「测试生图」或微调`
+        : `🎲 已由副 API 随机生成（${scenarioLabel}），可直接点「测试生图」或微调`;
+    } catch (e) {
+      statusEl.textContent = `❌ 副 API 随机出词失败：${e.message || e}`;
+    } finally {
+      randomPromptBtn.disabled = false;
+    }
+  });
+
+  // 测试生图：框内为空时自动先调副 API 随机出词；已有内容则直接过滤+加画风后缀后生图
   document.getElementById('btn-seedream-test').addEventListener('click', async () => {
     const statusEl = document.getElementById('seedream-test-status');
     const resultEl = document.getElementById('seedream-test-result');
     const btn = document.getElementById('btn-seedream-test');
-    const prompt = document.getElementById('setting-seedream-test-prompt').value.trim();
-    if (!prompt) {
-      statusEl.textContent = '请先输入提示词';
-      return;
-    }
     btn.disabled = true;
+    randomPromptBtn.disabled = true;
     resultEl.style.display = 'none';
-    statusEl.textContent = '生成中…（通常需要 10-30 秒）';
     try {
+      let rawPrompt = testPromptTextarea.value.trim();
+      if (!rawPrompt) {
+        const { generatedPrompt, scenarioLabel } = await generateRandomTestPrompt(statusEl);
+        rawPrompt = generatedPrompt;
+        statusEl.textContent = `🎲 已随机出词（${scenarioLabel}），正在生成图片…（通常需要 10-30 秒）`;
+      } else {
+        statusEl.textContent = '生成中…（通常需要 10-30 秒）';
+      }
+      const prompt = prepareFinalTestImagePrompt(rawPrompt, imageProviderEl.value);
       let dataUrl;
+      let openaiMeta = null;
       if (imageProviderEl.value === 'gemini') {
         dataUrl = await generateGeminiImage({
           apiKey: document.getElementById('setting-gemini-api-key').value.trim(),
@@ -545,14 +681,17 @@ export async function renderImageSettingsModal() {
           model: document.getElementById('setting-grok-model').value.trim(),
           aspectRatio: document.getElementById('setting-grok-aspect-ratio').value,
           resolution: document.getElementById('setting-grok-resolution').value,
-          prompt
+          prompt,
+          images: testRefImageDataUrl ? [testRefImageDataUrl] : null,
+          onMeta: (m) => { openaiMeta = m; }
         });
       } else if (imageProviderEl.value === 'grokweb') {
         dataUrl = await generateGrokWebImage({
           apiKey: document.getElementById('setting-grokweb-api-key').value.trim(),
           baseUrl: document.getElementById('setting-grokweb-base-url').value.trim(),
           model: document.getElementById('setting-grokweb-model').value.trim(),
-          prompt
+          prompt,
+          images: testRefImageDataUrl ? [testRefImageDataUrl] : null
         });
       } else if (imageProviderEl.value === 'wanx') {
         dataUrl = await generateWanxImage({
@@ -569,7 +708,10 @@ export async function renderImageSettingsModal() {
           model: document.getElementById('setting-openai-model').value.trim(),
           size: document.getElementById('setting-openai-size').value,
           quality: document.getElementById('setting-openai-quality').value,
-          prompt
+          inputFidelity: document.getElementById('setting-openai-input-fidelity').value,
+          prompt,
+          images: testRefImageDataUrl ? [testRefImageDataUrl] : null,
+          onMeta: (m) => { openaiMeta = m; }
         });
       } else {
         dataUrl = await generateSeedreamImage({
@@ -582,11 +724,24 @@ export async function renderImageSettingsModal() {
       }
       resultEl.src = dataUrl;
       resultEl.style.display = '';
-      statusEl.textContent = '✅ 生成成功';
+      if (openaiMeta) {
+        if (openaiMeta.mode === 'edits') {
+          statusEl.textContent = openaiMeta.downgraded
+            ? '✅ 生成成功（参考图 /images/edits，接口不支持 fidelity 已自动省略）'
+            : `✅ 生成成功（参考图 /images/edits，fidelity=${openaiMeta.inputFidelity || '默认'}）`;
+        } else {
+          statusEl.textContent = openaiMeta.skippedRefImage
+            ? '✅ 生成成功（纯文生图 /images/generations；当前模型不支持参考图已忽略）'
+            : '✅ 生成成功（纯文生图 /images/generations）';
+        }
+      } else {
+        statusEl.textContent = '✅ 生成成功';
+      }
     } catch (e) {
       statusEl.textContent = `❌ ${e.message || e}`;
     } finally {
       btn.disabled = false;
+      randomPromptBtn.disabled = false;
     }
   });
 
@@ -609,7 +764,7 @@ export async function renderImageSettingsModal() {
         btn.textContent = '总结中…';
         try {
           const latestConfig = await getConfig();
-          const api = latestConfig.api || {};
+          const api = resolveMemoryApi(latestConfig.api || {});
           const customPrompt = composePromptEl.value.trim();
           const basePrompt = customPrompt || composeDefaults[composeMode];
           const charDesc = '【测试角色卡】一位 28 岁女性，黑长直，御姐气质，高挑匀称。';
@@ -656,11 +811,6 @@ export async function renderImageSettingsModal() {
   document.getElementById('btn-save-image-settings').addEventListener('click', async () => {
     const latestConfig = await getConfig();
     composeState[composeMode] = composePromptEl.value;
-    const parsedOutfitLib = parseOutfitLibraryText(strictOutfitLibEl.value);
-    const defaultOutfitText = outfitLibraryToText(DEFAULT_STRICT_OUTFIT_LIBRARY);
-    const outfitLibraryToSave = (parsedOutfitLib.length === 0 || outfitLibraryToText(parsedOutfitLib) === defaultOutfitText)
-      ? []
-      : parsedOutfitLib;
     const parsedGrokOutfitLib = parseOutfitLibraryText(grokOutfitLibEl.value);
     const defaultGrokOutfitText = outfitLibraryToText(DEFAULT_GROK_OUTFIT_LIBRARY);
     const grokOutfitLibraryToSave = (parsedGrokOutfitLib.length === 0 || outfitLibraryToText(parsedGrokOutfitLib) === defaultGrokOutfitText)
@@ -681,7 +831,7 @@ export async function renderImageSettingsModal() {
         apiKey: document.getElementById('setting-seedream-api-key').value.trim(),
         model: document.getElementById('setting-seedream-model').value.trim(),
         size: document.getElementById('setting-seedream-size').value,
-        outfitLibrary: outfitLibraryToSave
+        composePrompt: (composeState.strict.trim() === DEFAULT_COMPOSE_SYSTEM_PROMPT.trim()) ? '' : composeState.strict.trim()
       },
       wanx: {
         baseUrl: document.getElementById('setting-wanx-base-url').value.trim(),
@@ -694,7 +844,8 @@ export async function renderImageSettingsModal() {
         apiKey: document.getElementById('setting-openai-api-key').value.trim(),
         model: document.getElementById('setting-openai-model').value.trim(),
         size: document.getElementById('setting-openai-size').value,
-        quality: document.getElementById('setting-openai-quality').value
+        quality: document.getElementById('setting-openai-quality').value,
+        inputFidelity: document.getElementById('setting-openai-input-fidelity').value
       },
       gemini: {
         baseUrl: document.getElementById('setting-gemini-base-url').value.trim(),

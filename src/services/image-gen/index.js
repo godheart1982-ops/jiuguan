@@ -3,7 +3,9 @@ export {
   isPaidImageProvider, isStrictMechanicalProvider, imageProviderDisplayName,
   generateSeedreamImage, generateWanxImage, generateGrokImage,
   buildGrokWebChatBody, generateGrokWebImage, generateGeminiImage,
-  buildOpenAIImageRequestBody, generateOpenAIImage, fetchOpenAIModels
+  buildOpenAIImageRequestBody, buildOpenAIImageEditFormData,
+  buildGrokImageRequestBody,
+  OPENAI_REF_IMAGE_PROMPT_PREFIX, generateOpenAIImage, fetchOpenAIModels
 } from './providers.js';
 export {
   anchorTextOf, anchorImgOf, mergeAnchorText, resolveAnchorRefImages,
@@ -17,5 +19,7 @@ export {
 export {
   DEFAULT_COMPOSE_SYSTEM_PROMPT, DEFAULT_GROK_COMPOSE_SYSTEM_PROMPT,
   DEFAULT_STRICT_DUO_COMPOSE_SYSTEM_PROMPT, DEFAULT_GROK_DUO_COMPOSE_SYSTEM_PROMPT,
-  shotWordsOf, prepareIllustrationPrompt, generateIllustrationForReply, generateIllustrationFromPrompt
+  STRICT_CINEMATIC_STYLE_SUFFIX, STRICT_TEST_SCENARIO_SEEDS,
+  hardFilterPrompt, shotWordsOf, prepareIllustrationPrompt, generateIllustrationForReply,
+  generateIllustrationFromPrompt, composeTestIllustrationPrompt, prepareFinalTestImagePrompt
 } from './compose.js';

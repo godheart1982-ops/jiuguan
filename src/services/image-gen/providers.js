@@ -200,11 +200,46 @@ export async function generateWanxImage({ apiKey, baseUrl, model, size, prompt }
  * @param {string} opts.resolution 1k / 2k
  * @param {string} opts.prompt     提示词（中文支持）
  */
-export async function generateGrokImage({ apiKey, baseUrl, model, aspectRatio, resolution, prompt }) {
+/**
+ * 构造 xAI Grok 生图请求体（纯函数，可单测）。
+ * 无参考图走 /images/generations；有参考图走 /images/edits（application/json，支持 image 或 images）。
+ */
+export function buildGrokImageRequestBody({ model, aspectRatio, resolution, prompt, images } = {}) {
+  const validImages = (Array.isArray(images) ? images : []).filter((u) => typeof u === 'string' && u.startsWith('data:image/'));
+  const isEdit = validImages.length > 0;
+  const rawPrompt = String(prompt || '').trim();
+  const finalPrompt = isEdit && !rawPrompt.startsWith("Use the exact woman's face")
+    ? `${OPENAI_REF_IMAGE_PROMPT_PREFIX}${rawPrompt}`
+    : rawPrompt;
+
+  const body = {
+    model: (model || 'grok-imagine-image').trim() || 'grok-imagine-image',
+    prompt: finalPrompt,
+    n: 1,
+    aspect_ratio: aspectRatio || '9:16',
+    resolution: resolution || '1k',
+    response_format: 'b64_json'
+  };
+
+  if (validImages.length === 1) {
+    body.image = { url: validImages[0], type: 'image_url' };
+  } else if (validImages.length > 1) {
+    body.images = validImages.map((url) => ({ url, type: 'image_url' }));
+  }
+
+  return { isEdit, body };
+}
+
+export async function generateGrokImage({ apiKey, baseUrl, model, aspectRatio, resolution, prompt, images, onMeta }) {
   if (!apiKey) throw new Error('未配置 Grok API Key（在侧边栏「插图设置」中填写）');
   if (!prompt || !prompt.trim()) throw new Error('提示词为空');
 
-  const url = `${(baseUrl || 'https://api.x.ai/v1').replace(/\/+$/, '')}/images/generations`;
+  const cleanBase = (baseUrl || 'https://api.x.ai/v1')
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/(images\/generations|images\/edits)$/i, '');
+  const { isEdit, body } = buildGrokImageRequestBody({ model, aspectRatio, resolution, prompt, images });
+  const url = `${cleanBase}/images/${isEdit ? 'edits' : 'generations'}`;
   let response;
   try {
     response = await fetch(url, {
@@ -213,14 +248,7 @@ export async function generateGrokImage({ apiKey, baseUrl, model, aspectRatio, r
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },
-      body: JSON.stringify({
-        model: (model || 'grok-imagine-image').trim(),
-        prompt: prompt.trim(),
-        n: 1,
-        aspect_ratio: aspectRatio || '9:16',
-        resolution: resolution || '1k',
-        response_format: 'b64_json'
-      })
+      body: JSON.stringify(body)
     });
   } catch (e) {
     throw new Error(`网络请求失败：${e.message || e}`);
@@ -244,18 +272,23 @@ export async function generateGrokImage({ apiKey, baseUrl, model, aspectRatio, r
 
   const data = await response.json();
   const item = data?.data?.[0] || {};
+  let out = '';
   if (item.b64_json) {
-    return `data:image/png;base64,${item.b64_json}`;
-  }
-  // 中转站可能忽略 response_format 只回 url：拉下来转 base64（url 会过期，不能直接存）
-  if (item.url) {
+    out = `data:image/png;base64,${item.b64_json}`;
+  } else if (item.url) {
+    // 中转站可能忽略 response_format 只回 url：拉下来转 base64（url 会过期，不能直接存）
     try {
-      return await fetchUrlAsDataUrl(item.url);
+      out = await fetchUrlAsDataUrl(item.url);
     } catch (e) {
       throw new Error(`图片下载失败：${e.message || e}`);
     }
+  } else {
+    throw new Error('生图 API 未返回图片数据');
   }
-  throw new Error('生图 API 未返回图片数据');
+  if (typeof onMeta === 'function') {
+    onMeta({ mode: isEdit ? 'edits' : 'generations' });
+  }
+  return out;
 }
 
 // 中转 chat/completions 模式：把生图包装成 OpenAI 聊天接口的应答里提取图片
@@ -517,7 +550,60 @@ function normalizeOpenAIBaseUrl(baseUrl) {
   return (baseUrl || 'https://api.openai.com/v1')
     .trim()
     .replace(/\/+$/, '')
-    .replace(/\/(images\/generations|chat\/completions)$/i, '');
+    .replace(/\/(images\/generations|images\/edits|chat\/completions)$/i, '');
+}
+
+export const OPENAI_REF_IMAGE_PROMPT_PREFIX = "Use the exact woman's face, facial features, and facial bone structure strictly from the reference image(s) (ignore any conflicting facial feature descriptions in the text below). Generate a single full-frame live-action film still (not a collage, split-screen, multi-angle turnaround sheet, or plain studio background) using the body figure, new hairstyle, accessories, clothing, pose, expression, and scene described below: ";
+
+function supportsOpenAIRefImages(model) {
+  return !/^dall-e-/i.test((model || 'gpt-image-1').trim() || 'gpt-image-1');
+}
+
+function dataUrlToBlob(dataUrl) {
+  const m = String(dataUrl || '').match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!m) throw new Error('参考图格式无效');
+  const mime = m[1];
+  const ext = mime.split('/')[1].replace('jpeg', 'jpg').replace(/[^a-z0-9]/gi, '') || 'png';
+  const bin = atob(m[2]);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return { blob: new Blob([bytes], { type: mime }), filename: `ref.${ext}` };
+}
+
+/**
+ * 构造 OpenAI /images/edits multipart/form-data 请求体（用于角色外貌参考图出图）。
+ */
+export function buildOpenAIImageEditFormData({
+  model, prompt, size, quality, images, inputFidelity = 'high', includeFidelity = true
+} = {}) {
+  const cleanModel = (model || 'gpt-image-1').trim() || 'gpt-image-1';
+  const rawPrompt = String(prompt || '').trim();
+  const finalPrompt = rawPrompt.startsWith("Use the exact woman's face")
+    ? rawPrompt
+    : `${OPENAI_REF_IMAGE_PROMPT_PREFIX}${rawPrompt}`;
+  const fd = new FormData();
+  fd.append('model', cleanModel);
+  fd.append('prompt', finalPrompt);
+  fd.append('n', '1');
+  if (size && size !== 'auto') {
+    fd.append('size', size);
+  }
+  if (quality && quality !== 'auto') {
+    fd.append('quality', quality);
+  }
+  const fidelity = inputFidelity === 'low' ? 'low' : 'high';
+  if (includeFidelity && /^(gpt-image|chatgpt-image)/i.test(cleanModel)) {
+    fd.append('input_fidelity', fidelity);
+  }
+  const validImages = (Array.isArray(images) ? images : []).filter((u) => typeof u === 'string' && u.startsWith('data:image/'));
+  const fieldName = validImages.length > 1 ? 'image[]' : 'image';
+  validImages.forEach((imgUrl, idx) => {
+    const { blob, filename } = dataUrlToBlob(imgUrl);
+    fd.append(fieldName, blob, validImages.length > 1 ? `ref-${idx + 1}-${filename.split('.').pop()}` : filename);
+  });
+  return fd;
 }
 
 async function parseErrorMessage(resp) {
@@ -553,36 +639,7 @@ export function buildOpenAIImageRequestBody({ model, prompt, size, quality } = {
   return body;
 }
 
-/**
- * 调用 OpenAI 官方或兼容中转站的 /images/generations 接口生图（收费 + 严格审核）。
- * 返回 data URL（data:image/...;base64,...），若返回临时 URL 则自动转存为本地 data URL。
- */
-export async function generateOpenAIImage({ baseUrl, apiKey, model, prompt, size, quality }) {
-  if (!apiKey || !apiKey.trim()) {
-    throw new Error('请先在插图设置里填写 OpenAI API Key');
-  }
-  const cleanBase = (baseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
-  const endpoint = /\/images\/generations$/i.test(cleanBase)
-    ? cleanBase
-    : `${cleanBase}/images/generations`;
-
-  const body = buildOpenAIImageRequestBody({ model, prompt, size, quality });
-
-  const resp = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey.trim()}`
-    },
-    body: JSON.stringify(body)
-  });
-
-  if (!resp.ok) {
-    const errMsg = await parseErrorMessage(resp);
-    throw new Error(`OpenAI 生图失败 (${resp.status}): ${errMsg}`);
-  }
-
-  const data = await resp.json();
+async function extractOpenAIImageDataUrl(data) {
   const item = data?.data?.[0];
   if (item?.b64_json) {
     const rawFmt = (data?.output_format || 'png').toLowerCase();
@@ -596,12 +653,90 @@ export async function generateOpenAIImage({ baseUrl, apiKey, model, prompt, size
 }
 
 /**
+ * 调用 OpenAI 官方或兼容中转站的 /images/generations（纯文生图）或 /images/edits（带参考图）接口生图。
+ * 返回 data URL（data:image/...;base64,...），若返回临时 URL 则自动转存为本地 data URL。
+ */
+export async function generateOpenAIImage({ baseUrl, apiKey, model, prompt, size, quality, inputFidelity = 'high', images, onMeta }) {
+  if (!apiKey || !apiKey.trim()) {
+    throw new Error('请先在插图设置里填写 OpenAI API Key');
+  }
+  const cleanKey = apiKey.trim();
+  const cleanModel = (model || 'gpt-image-1').trim() || 'gpt-image-1';
+  const validImages = (Array.isArray(images) ? images : []).filter((u) => typeof u === 'string' && u.startsWith('data:image/'));
+
+  if (validImages.length > 0 && supportsOpenAIRefImages(cleanModel)) {
+    const cleanBase = normalizeOpenAIBaseUrl(baseUrl);
+    const editEndpoint = `${cleanBase}/images/edits`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const fd = buildOpenAIImageEditFormData({
+        model: cleanModel,
+        prompt,
+        size,
+        quality,
+        images: validImages,
+        inputFidelity,
+        includeFidelity: attempt === 0
+      });
+      const resp = await fetch(editEndpoint, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${cleanKey}`
+        },
+        body: fd
+      });
+      if (resp.ok) {
+        const out = await extractOpenAIImageDataUrl(await resp.json());
+        if (typeof onMeta === 'function') {
+          const sentFidelity = attempt === 0 && /^(gpt-image|chatgpt-image)/i.test(cleanModel)
+            ? (inputFidelity === 'low' ? 'low' : 'high')
+            : null;
+          onMeta({ mode: 'edits', inputFidelity: sentFidelity, downgraded: attempt === 1 });
+        }
+        return out;
+      }
+      const errMsg = await parseErrorMessage(resp);
+      const isFidelityUnsupported = attempt === 0 && resp.status === 400
+        && /input_fidelity|unknown parameter|unrecognized/i.test(errMsg);
+      if (isFidelityUnsupported) continue;
+      throw new Error(`OpenAI 生图失败 (${resp.status}): ${errMsg}`);
+    }
+  }
+
+  const cleanBase = (baseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
+  const endpoint = /\/images\/generations$/i.test(cleanBase)
+    ? cleanBase
+    : `${cleanBase}/images/generations`;
+
+  const body = buildOpenAIImageRequestBody({ model: cleanModel, prompt, size, quality });
+
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${cleanKey}`
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!resp.ok) {
+    const errMsg = await parseErrorMessage(resp);
+    throw new Error(`OpenAI 生图失败 (${resp.status}): ${errMsg}`);
+  }
+
+  const out = await extractOpenAIImageDataUrl(await resp.json());
+  if (typeof onMeta === 'function') {
+    onMeta({ mode: 'generations', skippedRefImage: validImages.length > 0 });
+  }
+  return out;
+}
+
+/**
  * 从 OpenAI 或兼容中转站 GET /models 抓取可用模型列表。
  * 将疑似生图模型优先排在前面，返回 { all, imageLikely }。
  */
 export async function fetchOpenAIModels({ baseUrl, apiKey }) {
   if (!apiKey || !apiKey.trim()) {
-    throw new Error('请先填写 OpenAI API Key');
+    throw new Error('请先填写 API Key');
   }
   const cleanBase = normalizeOpenAIBaseUrl(baseUrl);
   const endpoint = `${cleanBase}/models`;

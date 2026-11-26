@@ -219,7 +219,7 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
   const menuItems = [
     {
       label: '编辑消息',
-      action: () => openMessageEditor(msg, wrapper, currentChat)
+      action: () => openMessageEditor(msg, wrapper, currentChat, onUpdate)
     },
     {
       label: '复制原文',
@@ -260,7 +260,7 @@ export function appendMessage(container, msg, avatarUrl, currentChat, onRefresh,
   return { wrapper, contentEl };
 }
 
-export function openMessageEditor(msg, wrapper, currentChat) {
+export function openMessageEditor(msg, wrapper, currentChat, onUpdate) {
   // 移除已存在的编辑器
   const existing = document.querySelector('.message-editor-overlay');
   if (existing) existing.remove();
@@ -323,10 +323,14 @@ export function openMessageEditor(msg, wrapper, currentChat) {
     if (currentChat.memory) markMessageMemoryEdited(currentChat, msg);
     msg.timestamp = new Date().toISOString();
 
-    const contentEl = wrapper.querySelector('.message-content');
-    contentEl.innerHTML = msg.role === 'assistant' ? renderAssistantDisplay(newContent) : renderMarkdown(newContent);
-
     await saveChat(currentChat);
+
+    if (onUpdate) {
+      onUpdate(false);
+    } else {
+      const contentEl = wrapper.querySelector('.message-content');
+      contentEl.innerHTML = msg.role === 'assistant' ? renderAssistantDisplay(newContent) : renderMarkdown(newContent);
+    }
 
     closeEditor();
   });

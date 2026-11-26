@@ -24,11 +24,14 @@ export function mergeAnchorText(anchors, name, text) {
 
 /**
  * 解析当前插图标记可用的锚点参考图（data URL 数组，null=无）。
- * v1 仅 grokweb 通道支持参考图；锚点按名字挂——画谁就用谁的脸，没登记的没有参考图。
+ * 支持 grokweb、grok 与 openai（非 dall-e-* 模型）；锚点按名字挂——画谁就用谁的脸，没登记的没有参考图。
  */
 export async function resolveAnchorRefImages(anchors, anchorName, config) {
-  const rawProvider = (config && config.image && config.image.provider) || '';
-  if (rawProvider !== 'grokweb') return null;
+  const imgCfg = (config && config.image) || {};
+  const rawProvider = imgCfg.provider || '';
+  const openaiModel = ((imgCfg.openai && imgCfg.openai.model) || 'gpt-image-1').trim();
+  const supportsOpenAI = rawProvider === 'openai' && !/^dall-e-/i.test(openaiModel);
+  if (rawProvider !== 'grokweb' && rawProvider !== 'grok' && !supportsOpenAI) return null;
   const imgPath = anchorImgOf(anchors && anchorName ? anchors[anchorName] : null);
   if (!imgPath) return null;
   const dataUrl = await getAnchorRefImageDataUrl(imgPath).catch(() => null);
@@ -42,7 +45,7 @@ export async function resolveAnchorRefImages(anchors, anchorName, config) {
 
 // 为指定名字提取外貌身材锚点：容貌身材优先取设定原文（卡内角色模块 / 回复里的人物卡、设定段），
 // 设定里没有才退到状态栏的样貌/身材字段。只在首次登记时调用一次。
-export async function extractNamedAppearanceAnchor({ name, replyContent, character, apiConfig, english = false }) {
+export async function extractNamedAppearanceAnchor({ name, replyContent, character, apiConfig, english = false, hasRefImage = false }) {
   // 设定来源：卡内全部角色模块（主角配角都在，提取 prompt 已限定只取「name」一人，长卡也读全）；
   // 老卡的 description/subCharacters 由 getCharacterModules 惰性并入；
   // 正文里随机 NPC 的人物卡和状态栏照旧一起给
@@ -51,22 +54,34 @@ export async function extractNamedAppearanceAnchor({ name, replyContent, charact
     ? 'You are an appearance extraction assistant for text-to-image models. From the given materials, extract the appearance and figure of the female character named 「' + name + '」, and output ONE English description of at most 60 words, used to keep her look consistent across generated images.\n' +
       'Source priority [strict]: prefer the original setting text (character card / profile sections in the reply); only when settings lack details, use the status-bar appearance fields.\n' +
       'Rules:\n' +
-      '- Include only: age, face shape & features, hairstyle & color, eye color, body type (relative words like tall/petite, no centimeter numbers), figure (overall contour words only), skin;\n' +
+      '- Include only: age, face shape & features, hair color & texture (no fixed hair styling or hairpins), eye color, body type (relative words like tall/petite, no centimeter numbers), figure (overall contour words only), skin;\n' +
       '- Start with "A {N}-year-old woman" — age from the setting, infer from vibe if absent, must be an adult;\n' +
-      '- No clothing, personality, identity, background, speech habits;\n' +
+      '- No fixed hair styling, accessories, clothing, personality, identity, background, speech habits;\n' +
       '- Celebrity resemblance: if the setting explicitly says she resembles a real celebrity, keep it as "resembling {English name}" (strong face anchor for the image model); if the setting names none, do NOT invent one;\n' +
       '- Do not invent details absent from the materials; extract ONLY 「' + name + '」, ignore all other characters;\n' +
       '- Output the description itself only, no explanations or prefixes.'
-    : '你是生图外貌提取助手。从给定材料中提取名为「' + name + '」的女性角色的外貌与身材，输出一段不超过 120 字的中文描述，用于文生图模型保持人物一致性。\n' +
-    '取材优先级【严格】：优先使用设定原文（角色卡设定 / 回复中该角色的人物卡、设定段）里的容貌身材描写；设定里找不到时，才使用状态栏的样貌/身材字段；都找到时以设定为准，状态栏仅作补充。\n' +
-    '要求：\n' +
-    '- 只包含：年龄、脸型五官、发型发色、眼色、身高体型（转化为高挑/娇小等相对词，禁止写具体厘米数）、身材曲线特点、肤质；\n' +
-    '- 以"一位{N}岁女性"开头——年龄取设定，未写则按气质推断，必须是成年人；\n' +
-    '- 禁止衣着描写、性格、身份、背景、口癖；\n' +
-    '- 禁止真实名人姓名（"神似某明星"转化为对那种典型五官气质的描述，只描述不点名）；\n' +
-    '- 禁止罩杯字母与单一部位的形状特写，只用整体轮廓词（丰满/纤细/曲线分明等）；\n' +
-    '- 材料里没有的信息不要发明；只提取「' + name + '」一个人，其他角色的描写一律忽略；\n' +
-    '- 只输出描述段落本身，不要任何解释或前后缀。';
+    : (hasRefImage
+      ? '你是生图身材锚点提取助手。名为「' + name + '」的女性角色已有面部外貌参考图，五官与脸型完全以参考图为准。\n' +
+        '请从给定材料中只提取她的年龄与身材轮廓，输出一段不超过 80 字的中文描述，用于文生图模型保持身材一致性。\n' +
+        '取材优先级【严格】：优先使用设定原文（角色卡设定 / 回复中该角色的人物卡、设定段）；设定找不到时再参考状态栏字段。\n' +
+        '要求：\n' +
+        '- 只包含：年龄、身高体型（转化为高挑/娇小等相对词，禁止写具体厘米数）、身材曲线特点（整体轮廓词，如匀称/纤细/丰满/曲线柔和）、肤质、基础发色与发质；\n' +
+        '- 以"一位{N}岁女性"开头——年龄取设定，未写则按气质推断，必须是成年人；\n' +
+        '- 【绝对禁止】描写任何脸型、五官、眉眼鼻唇（五官完全交给参考图，文字写了会与参考图冲突）；\n' +
+        '- 禁止具体发型款式（如马尾/丸子头/发髻）、发饰配饰、衣着、性格、身份、背景、口癖；\n' +
+        '- 禁止真实名人姓名、禁止罩杯字母与单一部位形状特写；\n' +
+        '- 材料里没有的信息不要发明；只提取「' + name + '」一个人，忽略其他角色；\n' +
+        '- 只输出描述段落本身，不要任何解释或前后缀。'
+      : '你是生图外貌提取助手。从给定材料中提取名为「' + name + '」的女性角色的外貌与身材，输出一段不超过 120 字的中文描述，用于文生图模型保持人物一致性。\n' +
+        '取材优先级【严格】：优先使用设定原文（角色卡设定 / 回复中该角色的人物卡、设定段）里的容貌身材描写；设定里找不到时，才使用状态栏的样貌/身材字段；都找到时以设定为准，状态栏仅作补充。\n' +
+        '要求：\n' +
+        '- 只包含：年龄、脸型五官、基础发色与发质（不写具体发型款式与发饰，留给剧情动态变化）、眼色、身高体型（转化为高挑/娇小等相对词，禁止写具体厘米数）、身材曲线特点、肤质；\n' +
+        '- 以"一位{N}岁女性"开头——年龄取设定，未写则按气质推断，必须是成年人；\n' +
+        '- 禁止具体发型款式（如马尾/丸子头/发髻）、发饰配饰、衣着描写、性格、身份、背景、口癖；\n' +
+        '- 禁止真实名人姓名（"神似某明星"转化为对那种典型五官气质的描述，只描述不点名）；\n' +
+        '- 禁止罩杯字母与单一部位的形状特写，只用整体轮廓词（丰满/纤细/曲线分明等）；\n' +
+        '- 材料里没有的信息不要发明；只提取「' + name + '」一个人，其他角色的描写一律忽略；\n' +
+        '- 只输出描述段落本身，不要任何解释或前后缀。');
   const userContent = (charDesc ? '【角色卡设定】\n' + charDesc + '\n\n' : '') +
     '【本轮回复（含状态栏）】\n' + (replyContent || '').slice(0, 6000);
   const result = await sendChat([

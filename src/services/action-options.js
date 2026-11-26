@@ -36,7 +36,7 @@ export function splitActionOptionsBlock(content) {
     const line = lines[i];
     const trimmed = line.trim();
     if (!trimmed) continue;
-    if (MODULE_HEADING_RE.test(trimmed) || /^记忆修正[：:]/.test(trimmed)) {
+    if (MODULE_HEADING_RE.test(trimmed) || /^#{2,6}\s/.test(trimmed) || /^!\[/.test(trimmed) || /^记忆修正[：:]/.test(trimmed)) {
       endLineIdx = i;
       break;
     }

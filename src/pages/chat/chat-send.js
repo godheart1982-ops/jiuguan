@@ -17,7 +17,7 @@ import { updateGenerationForeground } from '../../services/foreground.js';
 import { ensurePollinationsAnchors } from '../../services/image-gen.js';
 import { countTokens } from '../../utils/tokenizer.js';
 import { escapeHtml, scrollToBottom, isNearBottom, extractThinkingForDisplay } from './chat-utils.js';
-import { normalizePollinationsUrls, extractImageSeeds, hydrateGeneratedImages } from './chat-image.js';
+import { normalizePollinationsUrls, extractImageSeeds } from './chat-image.js';
 import { renderMarkdown, renderAssistantDisplay } from './chat-markdown.js';
 import { appendMessage } from './chat-message-ui.js';
 import {
@@ -452,17 +452,10 @@ export function createSendController(deps) {
         if (!freshChat || freshChat.id !== illustrationChatId) return;
         const result = await processSeedreamMarkers(assistantMsg, imageSwipe);
         if (!result || !result.visible) return;
-        let target = (contentEl && contentEl.isConnected) ? contentEl : null;
-        if (!target) {
-          const node = messagesContainer.querySelector(`.message[data-timestamp="${assistantMsg.timestamp}"]`);
-          target = node ? node.querySelector('.message-content') : null;
-        }
-        if (target) {
-          const follow = isNearBottom(messagesContainer);
-          target.innerHTML = renderAssistantDisplay(extractThinkingForDisplay(assistantMsg.content).body);
-          hydrateGeneratedImages(target);
-          if (follow) scrollToBottom(messagesContainer);
-        }
+        const follow = isNearBottom(messagesContainer);
+        const prevScrollTop = messagesContainer.scrollTop;
+        renderMessages(follow);
+        if (!follow) messagesContainer.scrollTop = prevScrollTop;
       });
     }
   }
